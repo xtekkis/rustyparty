@@ -1,2 +1,8 @@
-# Private plan, only for Claude Code to read
+# Project plan
 PLAN.md
+
+# Rust build output
+target/
+
+# Environment files
+.env
