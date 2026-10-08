@@ -17,8 +17,14 @@ async fn main() {
         .route("/health", get(health))
         .layer(TraceLayer::new_for_http());
 
+    // Port from PORT, default 3000
+    let port: u16 = match std::env::var("PORT") {
+        Ok(value) => value.parse().expect("PORT must be a number between 0 and 65535"),
+        Err(_) => 3000,
+    };
+
     // Listen on all network interfaces so phones on the same Wi-Fi can connect
-    let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    let listener = TcpListener::bind(("0.0.0.0", port)).await.unwrap();
     tracing::info!("Listening on {}", listener.local_addr().unwrap());
 
     axum::serve(listener, app).await.unwrap();
