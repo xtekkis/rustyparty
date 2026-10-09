@@ -1,3 +1,5 @@
+use rand::RngExt;
+
 // A player in a room
 #[derive(Debug)]
 pub struct Player {
@@ -19,6 +21,21 @@ impl Room {
             players: Vec::new(),
         }
     }
+}
+
+// Room code letters, without I and O
+const CODE_LETTERS: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ";
+const CODE_LENGTH: usize = 4;
+
+// Random room code like "KXTP"
+pub fn generate_code() -> String {
+    let mut rng = rand::rng();
+    let mut code = String::new();
+    for _ in 0..CODE_LENGTH {
+        let index = rng.random_range(0..CODE_LETTERS.len());
+        code.push(CODE_LETTERS[index] as char);
+    }
+    code
 }
 
 #[cfg(test)]
