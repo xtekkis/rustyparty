@@ -3,6 +3,8 @@ use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
+mod room;
+
 #[tokio::main]
 async fn main() {
     // Log level comes from RUST_LOG, with a default for local development
