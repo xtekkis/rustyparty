@@ -48,4 +48,26 @@ mod tests {
         assert_eq!(room.code, "KXTP");
         assert!(room.players.is_empty());
     }
+
+    // Codes are random, so check many of them
+    #[test]
+    fn code_has_four_uppercase_letters() {
+        for _ in 0..1000 {
+            let code = generate_code();
+            assert_eq!(code.len(), 4, "wrong length: {code}");
+            assert!(
+                code.chars().all(|c| c.is_ascii_uppercase()),
+                "not uppercase: {code}"
+            );
+        }
+    }
+
+    #[test]
+    fn code_skips_i_and_o() {
+        for _ in 0..1000 {
+            let code = generate_code();
+            assert!(!code.contains('I'), "contains I: {code}");
+            assert!(!code.contains('O'), "contains O: {code}");
+        }
+    }
 }
