@@ -1,9 +1,20 @@
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
 use axum::{Router, routing::get};
 use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
 mod room;
+
+use room::Room;
+
+// Shared by all requests: rooms by code
+#[derive(Clone, Default)]
+struct AppState {
+    rooms: Arc<Mutex<HashMap<String, Room>>>,
+}
 
 #[tokio::main]
 async fn main() {
@@ -15,9 +26,12 @@ async fn main() {
         )
         .init();
 
+    let state = AppState::default();
+
     let app = Router::new()
         .route("/health", get(health))
-        .layer(TraceLayer::new_for_http());
+        .layer(TraceLayer::new_for_http())
+        .with_state(state);
 
     // Port from PORT, default 3000
     let port: u16 = match std::env::var("PORT") {
