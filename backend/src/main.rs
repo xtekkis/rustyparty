@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{Path, State},
     http::StatusCode,
     routing::{get, post},
 };
@@ -37,6 +37,7 @@ async fn main() {
     let app = Router::new()
         .route("/health", get(health))
         .route("/rooms", post(create_room))
+        .route("/rooms/{code}", get(get_room))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
@@ -83,4 +84,30 @@ async fn create_room(State(state): State<AppState>) -> (StatusCode, Json<CreateR
     tracing::info!("Created room {code}");
 
     (StatusCode::CREATED, Json(CreateRoomResponse { code }))
+}
+
+#[derive(Serialize)]
+struct RoomInfo {
+    code: String,
+    players: usize,
+}
+
+// Look up a room by code, null if it doesn't exist
+async fn get_room(
+    State(state): State<AppState>,
+    Path(code): Path<String>,
+) -> Json<Option<RoomInfo>> {
+    // Accept lowercase codes too
+    let code = code.to_uppercase();
+    let rooms = state.rooms.lock().unwrap();
+
+    let info = match rooms.get(&code) {
+        Some(room) => Some(RoomInfo {
+            code: room.code.clone(),
+            players: room.players.len(),
+        }),
+        None => None,
+    };
+
+    Json(info)
 }
