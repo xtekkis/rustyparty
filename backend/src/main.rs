@@ -1,14 +1,20 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use axum::{Router, routing::get};
+use axum::{
+    Json, Router,
+    extract::State,
+    http::StatusCode,
+    routing::{get, post},
+};
+use serde::Serialize;
 use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
 mod room;
 
-use room::Room;
+use room::{Room, generate_code};
 
 // Shared by all requests: rooms by code
 #[derive(Clone, Default)]
@@ -30,6 +36,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/health", get(health))
+        .route("/rooms", post(create_room))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
@@ -49,4 +56,20 @@ async fn main() {
 // Health check
 async fn health() -> &'static str {
     "ok"
+}
+
+#[derive(Serialize)]
+struct CreateRoomResponse {
+    code: String,
+}
+
+// Create a room with a new code
+async fn create_room(State(state): State<AppState>) -> (StatusCode, Json<CreateRoomResponse>) {
+    let room = Room::new(generate_code());
+    let code = room.code.clone();
+
+    state.rooms.lock().unwrap().insert(code.clone(), room);
+    tracing::info!("Created room {code}");
+
+    (StatusCode::CREATED, Json(CreateRoomResponse { code }))
 }
