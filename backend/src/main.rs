@@ -65,10 +65,21 @@ struct CreateRoomResponse {
 
 // Create a room with a new code
 async fn create_room(State(state): State<AppState>) -> (StatusCode, Json<CreateRoomResponse>) {
-    let room = Room::new(generate_code());
-    let code = room.code.clone();
+    // Check and insert under one lock so two requests can't take the same code
+    let code = {
+        let mut rooms = state.rooms.lock().unwrap();
 
-    state.rooms.lock().unwrap().insert(code.clone(), room);
+        // Try new codes until one is free
+        let code = loop {
+            let code = generate_code();
+            if !rooms.contains_key(&code) {
+                break code;
+            }
+        };
+
+        rooms.insert(code.clone(), Room::new(code.clone()));
+        code
+    };
     tracing::info!("Created room {code}");
 
     (StatusCode::CREATED, Json(CreateRoomResponse { code }))
