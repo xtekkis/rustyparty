@@ -12,8 +12,10 @@ use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
+mod error;
 mod room;
 
+use error::AppError;
 use room::{Room, code::generate_code};
 
 // Shared by all requests: rooms by code
@@ -92,11 +94,11 @@ struct RoomInfo {
     players: usize,
 }
 
-// Look up a room by code, 404 if it doesn't exist
+// Look up a room by code
 async fn get_room(
     State(state): State<AppState>,
     Path(code): Path<String>,
-) -> Result<Json<RoomInfo>, StatusCode> {
+) -> Result<Json<RoomInfo>, AppError> {
     // Accept lowercase codes too
     let code = code.to_uppercase();
     let rooms = state.rooms.lock().unwrap();
@@ -106,6 +108,6 @@ async fn get_room(
             code: room.code.clone(),
             players: room.players.len(),
         })),
-        None => Err(StatusCode::NOT_FOUND),
+        None => Err(AppError::RoomNotFound),
     }
 }
