@@ -92,22 +92,20 @@ struct RoomInfo {
     players: usize,
 }
 
-// Look up a room by code, null if it doesn't exist
+// Look up a room by code, 404 if it doesn't exist
 async fn get_room(
     State(state): State<AppState>,
     Path(code): Path<String>,
-) -> Json<Option<RoomInfo>> {
+) -> Result<Json<RoomInfo>, StatusCode> {
     // Accept lowercase codes too
     let code = code.to_uppercase();
     let rooms = state.rooms.lock().unwrap();
 
-    let info = match rooms.get(&code) {
-        Some(room) => Some(RoomInfo {
+    match rooms.get(&code) {
+        Some(room) => Ok(Json(RoomInfo {
             code: room.code.clone(),
             players: room.players.len(),
-        }),
-        None => None,
-    };
-
-    Json(info)
+        })),
+        None => Err(StatusCode::NOT_FOUND),
+    }
 }
