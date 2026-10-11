@@ -14,7 +14,7 @@ use tracing_subscriber::EnvFilter;
 
 mod room;
 
-use room::{Room, generate_code};
+use room::{Room, code::generate_code};
 
 // Shared by all requests: rooms by code
 #[derive(Clone, Default)]
