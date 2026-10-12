@@ -3,8 +3,12 @@ use std::sync::{Arc, Mutex};
 
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{
+        Path, State,
+        ws::{Message, WebSocket, WebSocketUpgrade},
+    },
     http::StatusCode,
+    response::Response,
     routing::{get, post},
 };
 use serde::Serialize;
@@ -40,6 +44,7 @@ async fn main() {
         .route("/health", get(health))
         .route("/rooms", post(create_room))
         .route("/rooms/{code}", get(get_room))
+        .route("/ws", get(ws_handler))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
@@ -110,4 +115,28 @@ async fn get_room(
         })),
         None => Err(AppError::RoomNotFound),
     }
+}
+
+// Upgrade the HTTP request to a WebSocket
+async fn ws_handler(ws: WebSocketUpgrade) -> Response {
+    ws.on_upgrade(handle_socket)
+}
+
+// Send every message straight back
+async fn handle_socket(mut socket: WebSocket) {
+    tracing::debug!("WebSocket connected");
+
+    while let Some(Ok(message)) = socket.recv().await {
+        match message {
+            Message::Text(_) | Message::Binary(_) => {
+                if socket.send(message).await.is_err() {
+                    break;
+                }
+            }
+            // Pings and closing are handled automatically
+            _ => {}
+        }
+    }
+
+    tracing::debug!("WebSocket disconnected");
 }
