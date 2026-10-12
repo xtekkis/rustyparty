@@ -1,26 +1,15 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use axum::{
-    Json, Router,
-    extract::{
-        Path, State,
-        ws::{Message, WebSocket, WebSocketUpgrade},
-    },
-    http::StatusCode,
-    response::Response,
-    routing::{get, post},
-};
-use serde::Serialize;
 use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
 mod error;
 mod room;
+mod routes;
 
-use error::AppError;
-use room::{Room, code::generate_code};
+use room::Room;
 
 // Shared by all requests: rooms by code
 #[derive(Clone, Default)]
@@ -39,14 +28,7 @@ async fn main() {
         .init();
 
     let state = AppState::default();
-
-    let app = Router::new()
-        .route("/health", get(health))
-        .route("/rooms", post(create_room))
-        .route("/rooms/{code}", get(get_room))
-        .route("/ws", get(ws_handler))
-        .layer(TraceLayer::new_for_http())
-        .with_state(state);
+    let app = routes::router(state).layer(TraceLayer::new_for_http());
 
     // Port from PORT, default 3000
     let port: u16 = match std::env::var("PORT") {
@@ -59,84 +41,4 @@ async fn main() {
     tracing::info!("Listening on {}", listener.local_addr().unwrap());
 
     axum::serve(listener, app).await.unwrap();
-}
-
-// Health check
-async fn health() -> &'static str {
-    "ok"
-}
-
-#[derive(Serialize)]
-struct CreateRoomResponse {
-    code: String,
-}
-
-// Create a room with a new code
-async fn create_room(State(state): State<AppState>) -> (StatusCode, Json<CreateRoomResponse>) {
-    // Check and insert under one lock so two requests can't take the same code
-    let code = {
-        let mut rooms = state.rooms.lock().unwrap();
-
-        // Try new codes until one is free
-        let code = loop {
-            let code = generate_code();
-            if !rooms.contains_key(&code) {
-                break code;
-            }
-        };
-
-        rooms.insert(code.clone(), Room::new(code.clone()));
-        code
-    };
-    tracing::info!("Created room {code}");
-
-    (StatusCode::CREATED, Json(CreateRoomResponse { code }))
-}
-
-#[derive(Serialize)]
-struct RoomInfo {
-    code: String,
-    players: usize,
-}
-
-// Look up a room by code
-async fn get_room(
-    State(state): State<AppState>,
-    Path(code): Path<String>,
-) -> Result<Json<RoomInfo>, AppError> {
-    // Accept lowercase codes too
-    let code = code.to_uppercase();
-    let rooms = state.rooms.lock().unwrap();
-
-    match rooms.get(&code) {
-        Some(room) => Ok(Json(RoomInfo {
-            code: room.code.clone(),
-            players: room.players.len(),
-        })),
-        None => Err(AppError::RoomNotFound),
-    }
-}
-
-// Upgrade the HTTP request to a WebSocket
-async fn ws_handler(ws: WebSocketUpgrade) -> Response {
-    ws.on_upgrade(handle_socket)
-}
-
-// Send every message straight back
-async fn handle_socket(mut socket: WebSocket) {
-    tracing::debug!("WebSocket connected");
-
-    while let Some(Ok(message)) = socket.recv().await {
-        match message {
-            Message::Text(_) | Message::Binary(_) => {
-                if socket.send(message).await.is_err() {
-                    break;
-                }
-            }
-            // Pings and closing are handled automatically
-            _ => {}
-        }
-    }
-
-    tracing::debug!("WebSocket disconnected");
 }
