@@ -8,6 +8,7 @@ use axum::{
 
 use crate::AppState;
 use crate::protocol::{ClientMessage, ServerMessage};
+use crate::room::clean_nickname;
 
 // Upgrade the HTTP request to a WebSocket
 pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
@@ -36,7 +37,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             }) => {
                 if joined.is_some() {
                     Some(error_message("already_joined", "You are already in a room"))
-                } else {
+                } else if let Some(nickname) = clean_nickname(&nickname) {
                     // Accept lowercase codes too
                     let code = code.to_uppercase();
                     let player_id = {
@@ -52,6 +53,11 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                         }
                         None => Some(error_message("room_not_found", "No room with that code")),
                     }
+                } else {
+                    Some(error_message(
+                        "invalid_nickname",
+                        "Nickname must be 1 to 16 characters",
+                    ))
                 }
             }
             // Other messages are handled in later steps

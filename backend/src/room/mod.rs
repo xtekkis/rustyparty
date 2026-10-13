@@ -7,6 +7,19 @@ pub struct Player {
     pub nickname: String,
 }
 
+const NICKNAME_MAX_LENGTH: usize = 16;
+
+// Trim spaces, then check the nickname is 1 to 16 characters
+pub fn clean_nickname(nickname: &str) -> Option<String> {
+    let nickname = nickname.trim();
+    let length = nickname.chars().count();
+    if (1..=NICKNAME_MAX_LENGTH).contains(&length) {
+        Some(nickname.to_string())
+    } else {
+        None
+    }
+}
+
 // A group of players sharing a room code
 #[derive(Debug)]
 pub struct Room {
