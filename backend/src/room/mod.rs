@@ -37,6 +37,14 @@ impl Room {
         }
     }
 
+    // Nicknames are unique per room, ignoring upper and lower case
+    pub fn has_nickname(&self, nickname: &str) -> bool {
+        let nickname = nickname.to_lowercase();
+        self.players
+            .iter()
+            .any(|player| player.nickname.to_lowercase() == nickname)
+    }
+
     // Add a player and return their new id
     pub fn add_player(&mut self, nickname: String) -> u32 {
         let id = self.next_player_id;

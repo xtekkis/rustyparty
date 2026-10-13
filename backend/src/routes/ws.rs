@@ -40,18 +40,25 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                 } else if let Some(nickname) = clean_nickname(&nickname) {
                     // Accept lowercase codes too
                     let code = code.to_uppercase();
-                    let player_id = {
+                    // Check and add under one lock so two players can't take the same nickname
+                    let result = {
                         let mut rooms = state.rooms.lock().unwrap();
-                        rooms.get_mut(&code).map(|room| room.add_player(nickname))
+                        match rooms.get_mut(&code) {
+                            None => Err(error_message("room_not_found", "No room with that code")),
+                            Some(room) if room.has_nickname(&nickname) => {
+                                Err(error_message("nickname_taken", "That nickname is taken"))
+                            }
+                            Some(room) => Ok(room.add_player(nickname)),
+                        }
                     };
 
-                    match player_id {
-                        Some(id) => {
+                    match result {
+                        Ok(id) => {
                             tracing::info!("Player {id} joined room {code}");
                             joined = Some((code, id));
                             None
                         }
-                        None => Some(error_message("room_not_found", "No room with that code")),
+                        Err(reply) => Some(reply),
                     }
                 } else {
                     Some(error_message(
