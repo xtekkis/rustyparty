@@ -3,7 +3,7 @@ use axum::{
     response::Response,
 };
 
-use crate::protocol::ClientMessage;
+use crate::protocol::{ClientMessage, ServerMessage};
 
 // Upgrade the HTTP request to a WebSocket
 pub async fn ws_handler(ws: WebSocketUpgrade) -> Response {
@@ -23,9 +23,24 @@ async fn handle_socket(mut socket: WebSocket) {
         // Don't log message contents, they can hold session tokens
         match serde_json::from_str::<ClientMessage>(&text) {
             Ok(_message) => tracing::debug!("Received a valid message"),
-            Err(error) => tracing::debug!("Received invalid JSON: {error}"),
+            Err(error) => {
+                tracing::debug!("Received invalid JSON: {error}");
+                let reply = ServerMessage::Error {
+                    code: "invalid_message".to_string(),
+                    message: "Could not read that message".to_string(),
+                };
+                if send_message(&mut socket, &reply).await.is_err() {
+                    break;
+                }
+            }
         }
     }
 
     tracing::debug!("WebSocket disconnected");
+}
+
+// Send one message to this player as JSON
+async fn send_message(socket: &mut WebSocket, message: &ServerMessage) -> Result<(), axum::Error> {
+    let text = serde_json::to_string(message).expect("server messages always turn into JSON");
+    socket.send(Message::Text(text.into())).await
 }
