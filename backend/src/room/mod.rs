@@ -73,4 +73,38 @@ mod tests {
         assert_eq!(room.players.len(), 2);
         assert_eq!(room.players[1].nickname, "Sam");
     }
+
+    #[test]
+    fn nickname_is_trimmed() {
+        assert_eq!(clean_nickname("  Alex  "), Some("Alex".to_string()));
+    }
+
+    #[test]
+    fn empty_nickname_is_rejected() {
+        assert_eq!(clean_nickname(""), None);
+        assert_eq!(clean_nickname("    "), None);
+    }
+
+    #[test]
+    fn nickname_length_limits() {
+        assert_eq!(clean_nickname("A"), Some("A".to_string()));
+        assert!(clean_nickname(&"a".repeat(16)).is_some());
+        assert_eq!(clean_nickname(&"a".repeat(17)), None);
+    }
+
+    #[test]
+    fn nickname_length_counts_letters_not_bytes() {
+        // 16 Greek letters take 32 bytes but are still allowed
+        assert!(clean_nickname(&"λ".repeat(16)).is_some());
+        assert_eq!(clean_nickname(&"λ".repeat(17)), None);
+    }
+
+    #[test]
+    fn duplicate_nickname_ignores_case() {
+        let mut room = Room::new("KXTP".to_string());
+        room.add_player("Alex".to_string());
+        assert!(room.has_nickname("Alex"));
+        assert!(room.has_nickname("aLEX"));
+        assert!(!room.has_nickname("Sam"));
+    }
 }
