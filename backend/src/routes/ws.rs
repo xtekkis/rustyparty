@@ -48,15 +48,21 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                             Some(room) if room.has_nickname(&nickname) => {
                                 Err(error_message("nickname_taken", "That nickname is taken"))
                             }
-                            Some(room) => Ok(room.add_player(nickname)),
+                            Some(room) => {
+                                let player = room.add_player(nickname);
+                                Ok((player.id, player.token.clone()))
+                            }
                         }
                     };
 
                     match result {
-                        Ok(id) => {
+                        Ok((id, token)) => {
                             tracing::info!("Player {id} joined room {code}");
                             joined = Some((code, id));
-                            None
+                            Some(ServerMessage::Welcome {
+                                player_id: id,
+                                token,
+                            })
                         }
                         Err(reply) => Some(reply),
                     }

@@ -40,8 +40,8 @@ impl Room {
             .any(|player| player.nickname.to_lowercase() == nickname)
     }
 
-    // Add a player and return their new id
-    pub fn add_player(&mut self, nickname: String) -> u32 {
+    // Add a player and return them
+    pub fn add_player(&mut self, nickname: String) -> &Player {
         let id = self.next_player_id;
         self.next_player_id += 1;
         self.players.push(Player {
@@ -49,7 +49,7 @@ impl Room {
             nickname,
             token: generate_token(),
         });
-        id
+        self.players.last().expect("player was just added")
     }
 }
 
@@ -67,8 +67,8 @@ mod tests {
     #[test]
     fn players_get_increasing_ids() {
         let mut room = Room::new("KXTP".to_string());
-        assert_eq!(room.add_player("Alex".to_string()), 1);
-        assert_eq!(room.add_player("Sam".to_string()), 2);
+        assert_eq!(room.add_player("Alex".to_string()).id, 1);
+        assert_eq!(room.add_player("Sam".to_string()).id, 2);
         assert_eq!(room.players.len(), 2);
         assert_eq!(room.players[1].nickname, "Sam");
     }
