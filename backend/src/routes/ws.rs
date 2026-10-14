@@ -5,6 +5,7 @@ use axum::{
     },
     response::Response,
 };
+use tokio::sync::mpsc::{self, UnboundedSender};
 
 use crate::AppState;
 use crate::protocol::{ClientMessage, ServerMessage};
@@ -15,83 +16,108 @@ pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> 
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 
-// Read messages from one player
+// One player's connection: read from the phone and forward messages from the server
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
     tracing::debug!("WebSocket connected");
+
+    // Other parts of the server send to this player through the sender
+    let (sender, mut receiver) = mpsc::unbounded_channel::<ServerMessage>();
 
     // Room code and player id, once this connection has joined
     let mut joined: Option<(String, u32)> = None;
 
-    while let Some(Ok(message)) = socket.recv().await {
-        // Only text messages carry JSON; pings and closing are handled automatically
-        let Message::Text(text) = message else {
-            continue;
-        };
+    loop {
+        tokio::select! {
+            incoming = socket.recv() => {
+                let Some(Ok(message)) = incoming else {
+                    break;
+                };
+                // Only text messages carry JSON; pings and closing are handled automatically
+                let Message::Text(text) = message else {
+                    continue;
+                };
 
-        // Don't log message contents, they can hold session tokens
-        let reply = match serde_json::from_str::<ClientMessage>(&text) {
-            Ok(ClientMessage::Join {
-                room: code,
-                nickname,
-                ..
-            }) => {
-                if joined.is_some() {
-                    Some(error_message("already_joined", "You are already in a room"))
-                } else if let Some(nickname) = clean_nickname(&nickname) {
-                    // Accept lowercase codes too
-                    let code = code.to_uppercase();
-                    // Check and add under one lock so two players can't take the same nickname
-                    let result = {
-                        let mut rooms = state.rooms.lock().unwrap();
-                        match rooms.get_mut(&code) {
-                            None => Err(error_message("room_not_found", "No room with that code")),
-                            Some(room) if room.has_nickname(&nickname) => {
-                                Err(error_message("nickname_taken", "That nickname is taken"))
-                            }
-                            Some(room) => {
-                                let player = room.add_player(nickname);
-                                Ok((player.id, player.token.clone()))
-                            }
-                        }
-                    };
-
-                    match result {
-                        Ok((id, token)) => {
-                            tracing::info!("Player {id} joined room {code}");
-                            joined = Some((code, id));
-                            Some(ServerMessage::Welcome {
-                                player_id: id,
-                                token,
-                            })
-                        }
-                        Err(reply) => Some(reply),
-                    }
-                } else {
-                    Some(error_message(
-                        "invalid_nickname",
-                        "Nickname must be 1 to 16 characters",
-                    ))
+                let reply = handle_text(&text, &state, &mut joined, &sender);
+                if let Some(reply) = reply
+                    && send_message(&mut socket, &reply).await.is_err()
+                {
+                    break;
                 }
             }
-            // Other messages are handled in later steps
-            Ok(_) => None,
-            Err(error) => {
-                tracing::debug!("Received invalid JSON: {error}");
-                Some(error_message(
-                    "invalid_message",
-                    "Could not read that message",
-                ))
+            Some(outgoing) = receiver.recv() => {
+                if send_message(&mut socket, &outgoing).await.is_err() {
+                    break;
+                }
             }
-        };
-
-        if let Some(reply) = reply
-            && send_message(&mut socket, &reply).await.is_err()
-        {
-            break;
         }
     }
 
     tracing::debug!("WebSocket disconnected");
+}
+
+// Handle one message from the phone and return the reply, if any
+fn handle_text(
+    text: &str,
+    state: &AppState,
+    joined: &mut Option<(String, u32)>,
+    sender: &UnboundedSender<ServerMessage>,
+) -> Option<ServerMessage> {
+    // Don't log message contents, they can hold session tokens
+    match serde_json::from_str::<ClientMessage>(text) {
+        Ok(ClientMessage::Join {
+            room: code,
+            nickname,
+            ..
+        }) => {
+            if joined.is_some() {
+                return Some(error_message("already_joined", "You are already in a room"));
+            }
+            let Some(nickname) = clean_nickname(&nickname) else {
+                return Some(error_message(
+                    "invalid_nickname",
+                    "Nickname must be 1 to 16 characters",
+                ));
+            };
+
+            // Accept lowercase codes too
+            let code = code.to_uppercase();
+            // Check and add under one lock so two players can't take the same nickname
+            let result = {
+                let mut rooms = state.rooms.lock().unwrap();
+                match rooms.get_mut(&code) {
+                    None => Err(error_message("room_not_found", "No room with that code")),
+                    Some(room) if room.has_nickname(&nickname) => {
+                        Err(error_message("nickname_taken", "That nickname is taken"))
+                    }
+                    Some(room) => {
+                        let player = room.add_player(nickname, sender.clone());
+                        Ok((player.id, player.token.clone()))
+                    }
+                }
+            };
+
+            match result {
+                Ok((id, token)) => {
+                    tracing::info!("Player {id} joined room {code}");
+                    *joined = Some((code, id));
+                    Some(ServerMessage::Welcome {
+                        player_id: id,
+                        token,
+                    })
+                }
+                Err(reply) => Some(reply),
+            }
+        }
+        // Other messages are handled in later steps
+        Ok(_) => None,
+        Err(error) => {
+            tracing::debug!("Received invalid JSON: {error}");
+            Some(error_message(
+                "invalid_message",
+                "Could not read that message",
+            ))
+        }
+    }
 }
 
 // Error message with a fixed code and a text to show

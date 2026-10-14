@@ -1,4 +1,7 @@
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use tokio::sync::mpsc::UnboundedSender;
+
+use crate::protocol::ServerMessage;
 
 // A player in a room
 // No Debug on purpose, so the token can't end up in logs
@@ -6,6 +9,8 @@ pub struct Player {
     pub id: u32,
     pub nickname: String,
     pub token: String,
+    // Messages for this player's connection
+    pub sender: UnboundedSender<ServerMessage>,
 }
 
 // Secret that lets a player reconnect to their seat

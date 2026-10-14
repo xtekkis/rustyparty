@@ -1,6 +1,9 @@
 pub mod code;
 pub mod player;
 
+use tokio::sync::mpsc::UnboundedSender;
+
+use crate::protocol::ServerMessage;
 use player::{Player, generate_token};
 
 const NICKNAME_MAX_LENGTH: usize = 16;
@@ -41,13 +44,18 @@ impl Room {
     }
 
     // Add a player and return them
-    pub fn add_player(&mut self, nickname: String) -> &Player {
+    pub fn add_player(
+        &mut self,
+        nickname: String,
+        sender: UnboundedSender<ServerMessage>,
+    ) -> &Player {
         let id = self.next_player_id;
         self.next_player_id += 1;
         self.players.push(Player {
             id,
             nickname,
             token: generate_token(),
+            sender,
         });
         self.players.last().expect("player was just added")
     }
@@ -56,6 +64,12 @@ impl Room {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::sync::mpsc;
+
+    // Messages sent to it are dropped, tests here don't read them
+    fn test_sender() -> UnboundedSender<ServerMessage> {
+        mpsc::unbounded_channel().0
+    }
 
     #[test]
     fn new_room_has_code_and_no_players() {
@@ -67,8 +81,8 @@ mod tests {
     #[test]
     fn players_get_increasing_ids() {
         let mut room = Room::new("KXTP".to_string());
-        assert_eq!(room.add_player("Alex".to_string()).id, 1);
-        assert_eq!(room.add_player("Sam".to_string()).id, 2);
+        assert_eq!(room.add_player("Alex".to_string(), test_sender()).id, 1);
+        assert_eq!(room.add_player("Sam".to_string(), test_sender()).id, 2);
         assert_eq!(room.players.len(), 2);
         assert_eq!(room.players[1].nickname, "Sam");
     }
@@ -101,7 +115,7 @@ mod tests {
     #[test]
     fn duplicate_nickname_ignores_case() {
         let mut room = Room::new("KXTP".to_string());
-        room.add_player("Alex".to_string());
+        room.add_player("Alex".to_string(), test_sender());
         assert!(room.has_nickname("Alex"));
         assert!(room.has_nickname("aLEX"));
         assert!(!room.has_nickname("Sam"));
