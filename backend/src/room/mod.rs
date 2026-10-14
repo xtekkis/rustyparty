@@ -1,11 +1,7 @@
 pub mod code;
+pub mod player;
 
-// A player in a room
-#[derive(Debug)]
-pub struct Player {
-    pub id: u32,
-    pub nickname: String,
-}
+use player::{Player, generate_token};
 
 const NICKNAME_MAX_LENGTH: usize = 16;
 
@@ -21,7 +17,6 @@ pub fn clean_nickname(nickname: &str) -> Option<String> {
 }
 
 // A group of players sharing a room code
-#[derive(Debug)]
 pub struct Room {
     pub code: String,
     pub players: Vec<Player>,
@@ -49,7 +44,11 @@ impl Room {
     pub fn add_player(&mut self, nickname: String) -> u32 {
         let id = self.next_player_id;
         self.next_player_id += 1;
-        self.players.push(Player { id, nickname });
+        self.players.push(Player {
+            id,
+            nickname,
+            token: generate_token(),
+        });
         id
     }
 }
