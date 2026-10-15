@@ -33,7 +33,9 @@ async fn main() {
 
     // Port from PORT, default 3000
     let port: u16 = match std::env::var("PORT") {
-        Ok(value) => value.parse().expect("PORT must be a number between 0 and 65535"),
+        Ok(value) => value
+            .parse()
+            .expect("PORT must be a number between 0 and 65535"),
         Err(_) => 3000,
     };
 
