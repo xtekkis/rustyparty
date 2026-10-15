@@ -50,6 +50,7 @@ impl Room {
     pub fn add_player(
         &mut self,
         nickname: String,
+        avatar: Option<String>,
         sender: UnboundedSender<ServerMessage>,
     ) -> &Player {
         let id = self.next_player_id;
@@ -63,6 +64,7 @@ impl Room {
         self.players.push(Player {
             id,
             nickname,
+            avatar,
             token: generate_token(),
             sender,
         });
@@ -77,6 +79,7 @@ impl Room {
             .map(|player| LobbyPlayer {
                 id: player.id,
                 nickname: player.nickname.clone(),
+                avatar: player.avatar.clone(),
             })
             .collect();
         ServerMessage::Lobby {
@@ -114,8 +117,9 @@ mod tests {
     #[test]
     fn players_get_increasing_ids() {
         let mut room = Room::new("KXTP".to_string());
-        assert_eq!(room.add_player("Alex".to_string(), test_sender()).id, 1);
-        assert_eq!(room.add_player("Sam".to_string(), test_sender()).id, 2);
+        let alex = room.add_player("Alex".to_string(), None, test_sender()).id;
+        let sam = room.add_player("Sam".to_string(), None, test_sender()).id;
+        assert_eq!((alex, sam), (1, 2));
         assert_eq!(room.players.len(), 2);
         assert_eq!(room.players[1].nickname, "Sam");
     }
@@ -148,7 +152,7 @@ mod tests {
     #[test]
     fn duplicate_nickname_ignores_case() {
         let mut room = Room::new("KXTP".to_string());
-        room.add_player("Alex".to_string(), test_sender());
+        room.add_player("Alex".to_string(), None, test_sender());
         assert!(room.has_nickname("Alex"));
         assert!(room.has_nickname("aLEX"));
         assert!(!room.has_nickname("Sam"));
@@ -158,8 +162,8 @@ mod tests {
     fn first_player_is_host() {
         let mut room = Room::new("KXTP".to_string());
         assert_eq!(room.host, None);
-        let alex = room.add_player("Alex".to_string(), test_sender()).id;
-        room.add_player("Sam".to_string(), test_sender());
+        let alex = room.add_player("Alex".to_string(), None, test_sender()).id;
+        room.add_player("Sam".to_string(), None, test_sender());
         assert_eq!(room.host, Some(alex));
     }
 
@@ -168,8 +172,8 @@ mod tests {
         let mut room = Room::new("KXTP".to_string());
         let (alex_sender, mut alex_receiver) = mpsc::unbounded_channel();
         let (sam_sender, mut sam_receiver) = mpsc::unbounded_channel();
-        room.add_player("Alex".to_string(), alex_sender);
-        room.add_player("Sam".to_string(), sam_sender);
+        room.add_player("Alex".to_string(), Some("fox".to_string()), alex_sender);
+        room.add_player("Sam".to_string(), None, sam_sender);
 
         room.broadcast(&room.lobby_message());
 
@@ -178,6 +182,8 @@ mod tests {
                 Ok(ServerMessage::Lobby { players, .. }) => {
                     let names: Vec<&str> = players.iter().map(|p| p.nickname.as_str()).collect();
                     assert_eq!(names, ["Alex", "Sam"]);
+                    assert_eq!(players[0].avatar.as_deref(), Some("fox"));
+                    assert_eq!(players[1].avatar, None);
                 }
                 _ => panic!("expected a lobby message"),
             }

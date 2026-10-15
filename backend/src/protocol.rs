@@ -36,6 +36,7 @@ pub enum ClientMessage {
 pub struct LobbyPlayer {
     pub id: u32,
     pub nickname: String,
+    pub avatar: Option<String>,
 }
 
 // Messages from the server to a player's phone

@@ -67,6 +67,7 @@ fn handle_text(
         Ok(ClientMessage::Join {
             room: code,
             nickname,
+            avatar,
             ..
         }) => {
             if joined.is_some() {
@@ -90,7 +91,7 @@ fn handle_text(
                         Err(error_message("nickname_taken", "That nickname is taken"))
                     }
                     Some(room) => {
-                        let player = room.add_player(nickname, sender.clone());
+                        let player = room.add_player(nickname, avatar, sender.clone());
                         let new_player = (player.id, player.token.clone());
                         room.broadcast(&room.lobby_message());
                         Ok(new_player)

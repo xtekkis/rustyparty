@@ -8,6 +8,8 @@ use crate::protocol::ServerMessage;
 pub struct Player {
     pub id: u32,
     pub nickname: String,
+    // Avatar id, none means show initials
+    pub avatar: Option<String>,
     pub token: String,
     // Messages for this player's connection
     pub sender: UnboundedSender<ServerMessage>,
