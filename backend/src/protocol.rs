@@ -31,11 +31,19 @@ pub enum ClientMessage {
     Leave,
 }
 
+// A player as everyone in the lobby sees them
+#[derive(Debug, Clone, Serialize)]
+pub struct LobbyPlayer {
+    pub id: u32,
+    pub nickname: String,
+}
+
 // Messages from the server to a player's phone
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
     Welcome { player_id: u32, token: String },
+    Lobby { players: Vec<LobbyPlayer> },
     VoteResult { game: String, tie_break: bool },
     GameView { view: serde_json::Value },
     Error { code: String, message: String },

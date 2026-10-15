@@ -91,7 +91,9 @@ fn handle_text(
                     }
                     Some(room) => {
                         let player = room.add_player(nickname, sender.clone());
-                        Ok((player.id, player.token.clone()))
+                        let new_player = (player.id, player.token.clone());
+                        room.broadcast(&room.lobby_message());
+                        Ok(new_player)
                     }
                 }
             };

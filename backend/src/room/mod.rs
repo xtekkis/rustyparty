@@ -3,7 +3,7 @@ pub mod player;
 
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::protocol::ServerMessage;
+use crate::protocol::{LobbyPlayer, ServerMessage};
 use player::{Player, generate_token};
 
 const NICKNAME_MAX_LENGTH: usize = 16;
@@ -58,6 +58,27 @@ impl Room {
             sender,
         });
         self.players.last().expect("player was just added")
+    }
+
+    // The lobby as everyone sees it
+    pub fn lobby_message(&self) -> ServerMessage {
+        let players = self
+            .players
+            .iter()
+            .map(|player| LobbyPlayer {
+                id: player.id,
+                nickname: player.nickname.clone(),
+            })
+            .collect();
+        ServerMessage::Lobby { players }
+    }
+
+    // Send a message to every player in the room
+    pub fn broadcast(&self, message: &ServerMessage) {
+        for player in &self.players {
+            // A closed connection can't receive, so ignore the error
+            let _ = player.sender.send(message.clone());
+        }
     }
 }
 
@@ -119,5 +140,26 @@ mod tests {
         assert!(room.has_nickname("Alex"));
         assert!(room.has_nickname("aLEX"));
         assert!(!room.has_nickname("Sam"));
+    }
+
+    #[test]
+    fn broadcast_reaches_every_player() {
+        let mut room = Room::new("KXTP".to_string());
+        let (alex_sender, mut alex_receiver) = mpsc::unbounded_channel();
+        let (sam_sender, mut sam_receiver) = mpsc::unbounded_channel();
+        room.add_player("Alex".to_string(), alex_sender);
+        room.add_player("Sam".to_string(), sam_sender);
+
+        room.broadcast(&room.lobby_message());
+
+        for receiver in [&mut alex_receiver, &mut sam_receiver] {
+            match receiver.try_recv() {
+                Ok(ServerMessage::Lobby { players }) => {
+                    let names: Vec<&str> = players.iter().map(|p| p.nickname.as_str()).collect();
+                    assert_eq!(names, ["Alex", "Sam"]);
+                }
+                _ => panic!("expected a lobby message"),
+            }
+        }
     }
 }
