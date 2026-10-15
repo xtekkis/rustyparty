@@ -42,11 +42,25 @@ pub struct LobbyPlayer {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
-    Welcome { player_id: u32, token: String },
-    Lobby { players: Vec<LobbyPlayer> },
-    VoteResult { game: String, tie_break: bool },
-    GameView { view: serde_json::Value },
-    Error { code: String, message: String },
+    Welcome {
+        player_id: u32,
+        token: String,
+    },
+    Lobby {
+        players: Vec<LobbyPlayer>,
+        host: Option<u32>,
+    },
+    VoteResult {
+        game: String,
+        tie_break: bool,
+    },
+    GameView {
+        view: serde_json::Value,
+    },
+    Error {
+        code: String,
+        message: String,
+    },
     Replaced,
     Kicked,
 }

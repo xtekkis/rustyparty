@@ -23,6 +23,8 @@ pub fn clean_nickname(nickname: &str) -> Option<String> {
 pub struct Room {
     pub code: String,
     pub players: Vec<Player>,
+    // Player id of the host, none while the room is empty
+    pub host: Option<u32>,
     next_player_id: u32,
 }
 
@@ -31,6 +33,7 @@ impl Room {
         Room {
             code,
             players: Vec::new(),
+            host: None,
             next_player_id: 1,
         }
     }
@@ -51,6 +54,12 @@ impl Room {
     ) -> &Player {
         let id = self.next_player_id;
         self.next_player_id += 1;
+
+        // The first player to join is the host
+        if self.host.is_none() {
+            self.host = Some(id);
+        }
+
         self.players.push(Player {
             id,
             nickname,
@@ -70,7 +79,10 @@ impl Room {
                 nickname: player.nickname.clone(),
             })
             .collect();
-        ServerMessage::Lobby { players }
+        ServerMessage::Lobby {
+            players,
+            host: self.host,
+        }
     }
 
     // Send a message to every player in the room
@@ -143,6 +155,15 @@ mod tests {
     }
 
     #[test]
+    fn first_player_is_host() {
+        let mut room = Room::new("KXTP".to_string());
+        assert_eq!(room.host, None);
+        let alex = room.add_player("Alex".to_string(), test_sender()).id;
+        room.add_player("Sam".to_string(), test_sender());
+        assert_eq!(room.host, Some(alex));
+    }
+
+    #[test]
     fn broadcast_reaches_every_player() {
         let mut room = Room::new("KXTP".to_string());
         let (alex_sender, mut alex_receiver) = mpsc::unbounded_channel();
@@ -154,7 +175,7 @@ mod tests {
 
         for receiver in [&mut alex_receiver, &mut sam_receiver] {
             match receiver.try_recv() {
-                Ok(ServerMessage::Lobby { players }) => {
+                Ok(ServerMessage::Lobby { players, .. }) => {
                     let names: Vec<&str> = players.iter().map(|p| p.nickname.as_str()).collect();
                     assert_eq!(names, ["Alex", "Sam"]);
                 }
