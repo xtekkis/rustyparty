@@ -9,7 +9,7 @@ use tokio::sync::mpsc::{self, UnboundedSender};
 
 use crate::AppState;
 use crate::protocol::{ClientMessage, ServerMessage};
-use crate::room::{clean_nickname, player::is_known_avatar};
+use crate::room::{clean_nickname, is_valid_points_to_win, player::is_known_avatar};
 
 // Upgrade the HTTP request to a WebSocket
 pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
@@ -72,6 +72,9 @@ fn handle_text(
         }) => handle_join(room, nickname, avatar, state, joined, sender),
         Ok(ClientMessage::SetAvatar { avatar }) => handle_set_avatar(avatar, state, joined),
         Ok(ClientMessage::Ready { ready }) => handle_ready(ready, state, joined),
+        Ok(ClientMessage::RoomSettings { points_to_win }) => {
+            handle_room_settings(points_to_win, state, joined)
+        }
         // Other messages are handled in later steps
         Ok(_) => None,
         Err(error) => {
@@ -179,6 +182,33 @@ fn handle_ready(
         tracing::debug!("Player {player_id} ready: {ready}");
         room.broadcast(&room.lobby_message());
     }
+    None
+}
+
+// Host changes how many points win the game
+fn handle_room_settings(
+    points_to_win: u8,
+    state: &AppState,
+    joined: &Option<(String, u32)>,
+) -> Option<ServerMessage> {
+    let Some((code, player_id)) = joined else {
+        return Some(error_message("not_joined", "Join a room first"));
+    };
+    if !is_valid_points_to_win(points_to_win) {
+        return Some(error_message(
+            "invalid_points_to_win",
+            "Points to win must be 3 to 15",
+        ));
+    }
+
+    let mut rooms = state.rooms.lock().unwrap();
+    let room = rooms.get_mut(code)?;
+    if room.host != Some(*player_id) {
+        return Some(error_message("not_host", "Only the host can do that"));
+    }
+
+    room.settings.points_to_win = points_to_win;
+    room.broadcast(&room.lobby_message());
     None
 }
 

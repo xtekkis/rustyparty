@@ -3,10 +3,18 @@ pub mod player;
 
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::protocol::{LobbyPlayer, ServerMessage};
+use crate::protocol::{LobbyPlayer, RoomSettings, ServerMessage};
 use player::{Player, generate_token};
 
 const NICKNAME_MAX_LENGTH: usize = 16;
+
+const POINTS_TO_WIN_DEFAULT: u8 = 7;
+const POINTS_TO_WIN_MIN: u8 = 3;
+const POINTS_TO_WIN_MAX: u8 = 15;
+
+pub fn is_valid_points_to_win(points: u8) -> bool {
+    (POINTS_TO_WIN_MIN..=POINTS_TO_WIN_MAX).contains(&points)
+}
 
 // Trim spaces, then check the nickname is 1 to 16 characters
 pub fn clean_nickname(nickname: &str) -> Option<String> {
@@ -25,6 +33,7 @@ pub struct Room {
     pub players: Vec<Player>,
     // Player id of the host, none while the room is empty
     pub host: Option<u32>,
+    pub settings: RoomSettings,
     next_player_id: u32,
 }
 
@@ -34,6 +43,9 @@ impl Room {
             code,
             players: Vec::new(),
             host: None,
+            settings: RoomSettings {
+                points_to_win: POINTS_TO_WIN_DEFAULT,
+            },
             next_player_id: 1,
         }
     }
@@ -94,6 +106,7 @@ impl Room {
         ServerMessage::Lobby {
             players,
             host: self.host,
+            settings: self.settings,
         }
     }
 
@@ -203,6 +216,20 @@ mod tests {
         };
         let ready: Vec<bool> = players.iter().map(|player| player.ready).collect();
         assert_eq!(ready, [true, false]);
+    }
+
+    #[test]
+    fn points_to_win_starts_at_7() {
+        let room = Room::new("KXTP".to_string());
+        assert_eq!(room.settings.points_to_win, 7);
+    }
+
+    #[test]
+    fn points_to_win_limits() {
+        assert!(!is_valid_points_to_win(2));
+        assert!(is_valid_points_to_win(3));
+        assert!(is_valid_points_to_win(15));
+        assert!(!is_valid_points_to_win(16));
     }
 
     #[test]

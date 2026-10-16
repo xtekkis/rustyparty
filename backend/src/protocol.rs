@@ -40,6 +40,12 @@ pub struct LobbyPlayer {
     pub ready: bool,
 }
 
+// Room settings the host can change
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct RoomSettings {
+    pub points_to_win: u8,
+}
+
 // Messages from the server to a player's phone
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -51,6 +57,7 @@ pub enum ServerMessage {
     Lobby {
         players: Vec<LobbyPlayer>,
         host: Option<u32>,
+        settings: RoomSettings,
     },
     VoteResult {
         game: String,
