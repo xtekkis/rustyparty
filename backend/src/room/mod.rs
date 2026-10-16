@@ -65,25 +65,18 @@ impl Room {
             id,
             nickname,
             avatar,
+            ready: false,
             token: generate_token(),
             sender,
         });
         self.players.last().expect("player was just added")
     }
 
-    // Change a player's avatar, false if there is no such player
-    pub fn set_avatar(&mut self, player_id: u32, avatar: Option<String>) -> bool {
-        match self
-            .players
+    // Find a player by id to change them
+    pub fn player_mut(&mut self, player_id: u32) -> Option<&mut Player> {
+        self.players
             .iter_mut()
             .find(|player| player.id == player_id)
-        {
-            Some(player) => {
-                player.avatar = avatar;
-                true
-            }
-            None => false,
-        }
     }
 
     // The lobby as everyone sees it
@@ -183,12 +176,18 @@ mod tests {
     }
 
     #[test]
-    fn avatar_can_be_changed() {
+    fn find_player_by_id() {
         let mut room = Room::new("KXTP".to_string());
         let alex = room.add_player("Alex".to_string(), None, test_sender()).id;
-        assert!(room.set_avatar(alex, Some("owl".to_string())));
-        assert_eq!(room.players[0].avatar.as_deref(), Some("owl"));
-        assert!(!room.set_avatar(99, None));
+        assert_eq!(room.player_mut(alex).map(|player| player.id), Some(alex));
+        assert!(room.player_mut(99).is_none());
+    }
+
+    #[test]
+    fn new_player_is_not_ready() {
+        let mut room = Room::new("KXTP".to_string());
+        let alex = room.add_player("Alex".to_string(), None, test_sender());
+        assert!(!alex.ready);
     }
 
     #[test]

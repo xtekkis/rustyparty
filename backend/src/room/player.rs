@@ -10,6 +10,8 @@ pub struct Player {
     pub nickname: String,
     // Avatar id, none means show initials
     pub avatar: Option<String>,
+    // Ready to start the game vote
+    pub ready: bool,
     pub token: String,
     // Messages for this player's connection
     pub sender: UnboundedSender<ServerMessage>,

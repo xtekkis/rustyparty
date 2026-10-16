@@ -71,6 +71,7 @@ fn handle_text(
             ..
         }) => handle_join(room, nickname, avatar, state, joined, sender),
         Ok(ClientMessage::SetAvatar { avatar }) => handle_set_avatar(avatar, state, joined),
+        Ok(ClientMessage::Ready { ready }) => handle_ready(ready, state, joined),
         // Other messages are handled in later steps
         Ok(_) => None,
         Err(error) => {
@@ -152,9 +153,30 @@ fn handle_set_avatar(
 
     let mut rooms = state.rooms.lock().unwrap();
     if let Some(room) = rooms.get_mut(code)
-        && room.set_avatar(*player_id, avatar)
+        && let Some(player) = room.player_mut(*player_id)
     {
+        player.avatar = avatar;
         room.broadcast(&room.lobby_message());
+    }
+    None
+}
+
+// Mark this connection's player as ready or not
+fn handle_ready(
+    ready: bool,
+    state: &AppState,
+    joined: &Option<(String, u32)>,
+) -> Option<ServerMessage> {
+    let Some((code, player_id)) = joined else {
+        return Some(error_message("not_joined", "Join a room first"));
+    };
+
+    let mut rooms = state.rooms.lock().unwrap();
+    if let Some(room) = rooms.get_mut(code)
+        && let Some(player) = room.player_mut(*player_id)
+    {
+        player.ready = ready;
+        tracing::debug!("Player {player_id} ready: {ready}");
     }
     None
 }
