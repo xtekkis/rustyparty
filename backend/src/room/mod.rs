@@ -71,6 +71,21 @@ impl Room {
         self.players.last().expect("player was just added")
     }
 
+    // Change a player's avatar, false if there is no such player
+    pub fn set_avatar(&mut self, player_id: u32, avatar: Option<String>) -> bool {
+        match self
+            .players
+            .iter_mut()
+            .find(|player| player.id == player_id)
+        {
+            Some(player) => {
+                player.avatar = avatar;
+                true
+            }
+            None => false,
+        }
+    }
+
     // The lobby as everyone sees it
     pub fn lobby_message(&self) -> ServerMessage {
         let players = self
@@ -165,6 +180,15 @@ mod tests {
         let alex = room.add_player("Alex".to_string(), None, test_sender()).id;
         room.add_player("Sam".to_string(), None, test_sender());
         assert_eq!(room.host, Some(alex));
+    }
+
+    #[test]
+    fn avatar_can_be_changed() {
+        let mut room = Room::new("KXTP".to_string());
+        let alex = room.add_player("Alex".to_string(), None, test_sender()).id;
+        assert!(room.set_avatar(alex, Some("owl".to_string())));
+        assert_eq!(room.players[0].avatar.as_deref(), Some("owl"));
+        assert!(!room.set_avatar(99, None));
     }
 
     #[test]

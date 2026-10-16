@@ -15,6 +15,14 @@ pub struct Player {
     pub sender: UnboundedSender<ServerMessage>,
 }
 
+// Avatar ids, matching the image names in frontend/public/avatars
+pub const AVATARS: &[&str] = &["fox", "cat", "owl", "bear", "frog"];
+
+// No avatar is fine, it means initials
+pub fn is_known_avatar(avatar: Option<&str>) -> bool {
+    avatar.is_none_or(|id| AVATARS.contains(&id))
+}
+
 // Secret that lets a player reconnect to their seat
 pub fn generate_token() -> String {
     let mut bytes = [0u8; 32];
@@ -25,6 +33,18 @@ pub fn generate_token() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn known_avatars_and_initials_are_allowed() {
+        assert!(is_known_avatar(Some("fox")));
+        assert!(is_known_avatar(None));
+    }
+
+    #[test]
+    fn unknown_avatar_is_rejected() {
+        assert!(!is_known_avatar(Some("dragon")));
+        assert!(!is_known_avatar(Some("")));
+    }
 
     #[test]
     fn token_is_43_characters() {

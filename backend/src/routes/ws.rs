@@ -9,7 +9,7 @@ use tokio::sync::mpsc::{self, UnboundedSender};
 
 use crate::AppState;
 use crate::protocol::{ClientMessage, ServerMessage};
-use crate::room::clean_nickname;
+use crate::room::{clean_nickname, player::is_known_avatar};
 
 // Upgrade the HTTP request to a WebSocket
 pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
@@ -65,52 +65,12 @@ fn handle_text(
     // Don't log message contents, they can hold session tokens
     match serde_json::from_str::<ClientMessage>(text) {
         Ok(ClientMessage::Join {
-            room: code,
+            room,
             nickname,
             avatar,
             ..
-        }) => {
-            if joined.is_some() {
-                return Some(error_message("already_joined", "You are already in a room"));
-            }
-            let Some(nickname) = clean_nickname(&nickname) else {
-                return Some(error_message(
-                    "invalid_nickname",
-                    "Nickname must be 1 to 16 characters",
-                ));
-            };
-
-            // Accept lowercase codes too
-            let code = code.to_uppercase();
-            // Check and add under one lock so two players can't take the same nickname
-            let result = {
-                let mut rooms = state.rooms.lock().unwrap();
-                match rooms.get_mut(&code) {
-                    None => Err(error_message("room_not_found", "No room with that code")),
-                    Some(room) if room.has_nickname(&nickname) => {
-                        Err(error_message("nickname_taken", "That nickname is taken"))
-                    }
-                    Some(room) => {
-                        let player = room.add_player(nickname, avatar, sender.clone());
-                        let new_player = (player.id, player.token.clone());
-                        room.broadcast(&room.lobby_message());
-                        Ok(new_player)
-                    }
-                }
-            };
-
-            match result {
-                Ok((id, token)) => {
-                    tracing::info!("Player {id} joined room {code}");
-                    *joined = Some((code, id));
-                    Some(ServerMessage::Welcome {
-                        player_id: id,
-                        token,
-                    })
-                }
-                Err(reply) => Some(reply),
-            }
-        }
+        }) => handle_join(room, nickname, avatar, state, joined, sender),
+        Ok(ClientMessage::SetAvatar { avatar }) => handle_set_avatar(avatar, state, joined),
         // Other messages are handled in later steps
         Ok(_) => None,
         Err(error) => {
@@ -121,6 +81,82 @@ fn handle_text(
             ))
         }
     }
+}
+
+// Add this connection's player to a room
+fn handle_join(
+    code: String,
+    nickname: String,
+    avatar: Option<String>,
+    state: &AppState,
+    joined: &mut Option<(String, u32)>,
+    sender: &UnboundedSender<ServerMessage>,
+) -> Option<ServerMessage> {
+    if joined.is_some() {
+        return Some(error_message("already_joined", "You are already in a room"));
+    }
+    let Some(nickname) = clean_nickname(&nickname) else {
+        return Some(error_message(
+            "invalid_nickname",
+            "Nickname must be 1 to 16 characters",
+        ));
+    };
+    if !is_known_avatar(avatar.as_deref()) {
+        return Some(error_message("unknown_avatar", "That avatar doesn't exist"));
+    }
+
+    // Accept lowercase codes too
+    let code = code.to_uppercase();
+    // Check and add under one lock so two players can't take the same nickname
+    let result = {
+        let mut rooms = state.rooms.lock().unwrap();
+        match rooms.get_mut(&code) {
+            None => Err(error_message("room_not_found", "No room with that code")),
+            Some(room) if room.has_nickname(&nickname) => {
+                Err(error_message("nickname_taken", "That nickname is taken"))
+            }
+            Some(room) => {
+                let player = room.add_player(nickname, avatar, sender.clone());
+                let new_player = (player.id, player.token.clone());
+                room.broadcast(&room.lobby_message());
+                Ok(new_player)
+            }
+        }
+    };
+
+    match result {
+        Ok((id, token)) => {
+            tracing::info!("Player {id} joined room {code}");
+            *joined = Some((code, id));
+            Some(ServerMessage::Welcome {
+                player_id: id,
+                token,
+            })
+        }
+        Err(reply) => Some(reply),
+    }
+}
+
+// Change this connection's avatar and show it to everyone
+fn handle_set_avatar(
+    avatar: Option<String>,
+    state: &AppState,
+    joined: &Option<(String, u32)>,
+) -> Option<ServerMessage> {
+    let Some((code, player_id)) = joined else {
+        return Some(error_message("not_joined", "Join a room first"));
+    };
+    if !is_known_avatar(avatar.as_deref()) {
+        return Some(error_message("unknown_avatar", "That avatar doesn't exist"));
+    }
+
+    let mut rooms = state.rooms.lock().unwrap();
+    if let Some(room) = rooms.get_mut(code)
+        && room.set_avatar(*player_id, avatar)
+    {
+        room.broadcast(&room.lobby_message());
+    }
+    None
 }
 
 // Error message with a fixed code and a text to show
