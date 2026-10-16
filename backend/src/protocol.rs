@@ -37,6 +37,7 @@ pub struct LobbyPlayer {
     pub id: u32,
     pub nickname: String,
     pub avatar: Option<String>,
+    pub ready: bool,
 }
 
 // Messages from the server to a player's phone

@@ -88,6 +88,7 @@ impl Room {
                 id: player.id,
                 nickname: player.nickname.clone(),
                 avatar: player.avatar.clone(),
+                ready: player.ready,
             })
             .collect();
         ServerMessage::Lobby {
@@ -188,6 +189,20 @@ mod tests {
         let mut room = Room::new("KXTP".to_string());
         let alex = room.add_player("Alex".to_string(), None, test_sender());
         assert!(!alex.ready);
+    }
+
+    #[test]
+    fn lobby_shows_ready_state() {
+        let mut room = Room::new("KXTP".to_string());
+        let alex = room.add_player("Alex".to_string(), None, test_sender()).id;
+        room.add_player("Sam".to_string(), None, test_sender());
+        room.player_mut(alex).expect("Alex is in the room").ready = true;
+
+        let ServerMessage::Lobby { players, .. } = room.lobby_message() else {
+            panic!("expected a lobby message");
+        };
+        let ready: Vec<bool> = players.iter().map(|player| player.ready).collect();
+        assert_eq!(ready, [true, false]);
     }
 
     #[test]

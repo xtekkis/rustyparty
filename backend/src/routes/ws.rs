@@ -177,6 +177,7 @@ fn handle_ready(
     {
         player.ready = ready;
         tracing::debug!("Player {player_id} ready: {ready}");
+        room.broadcast(&room.lobby_message());
     }
     None
 }
