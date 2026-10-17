@@ -48,6 +48,11 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                 if send_message(&mut socket, &outgoing).await.is_err() {
                     break;
                 }
+                // A kicked player's connection is closed by the server
+                if matches!(outgoing, ServerMessage::Kicked) {
+                    let _ = socket.send(Message::Close(None)).await;
+                    break;
+                }
             }
         }
     }
@@ -75,6 +80,7 @@ fn handle_text(
         Ok(ClientMessage::RoomSettings { points_to_win }) => {
             handle_room_settings(points_to_win, state, joined)
         }
+        Ok(ClientMessage::Kick { player_id }) => handle_kick(player_id, state, joined),
         Ok(ClientMessage::Leave) => handle_leave(state, joined),
         // Other messages are handled in later steps
         Ok(_) => None,
@@ -209,6 +215,42 @@ fn handle_room_settings(
     }
 
     room.settings.points_to_win = points_to_win;
+    room.broadcast(&room.lobby_message());
+    None
+}
+
+// Host removes another player from the room
+fn handle_kick(
+    target_id: u32,
+    state: &AppState,
+    joined: &Option<(String, u32)>,
+) -> Option<ServerMessage> {
+    let Some((code, player_id)) = joined else {
+        return Some(error_message("not_joined", "Join a room first"));
+    };
+
+    let mut rooms = state.rooms.lock().unwrap();
+    let room = rooms.get_mut(code)?;
+    if room.host != Some(*player_id) {
+        return Some(error_message("not_host", "Only the host can do that"));
+    }
+    if target_id == *player_id {
+        return Some(error_message(
+            "cannot_kick_yourself",
+            "You can't kick yourself",
+        ));
+    }
+    let Some(target) = room.players.iter().find(|player| player.id == target_id) else {
+        return Some(error_message(
+            "player_not_found",
+            "That player isn't in the room",
+        ));
+    };
+
+    // Tell them before removing them, their connection closes when it arrives
+    let _ = target.sender.send(ServerMessage::Kicked);
+    room.remove_player(target_id);
+    tracing::info!("Player {target_id} was kicked from room {code}");
     room.broadcast(&room.lobby_message());
     None
 }
