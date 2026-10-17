@@ -225,6 +225,7 @@ fn handle_leave(state: &AppState, joined: &mut Option<(String, u32)>) -> Option<
         && room.remove_player(player_id)
     {
         tracing::info!("Player {player_id} left room {code}");
+        room.broadcast(&room.lobby_message());
     }
     None
 }
