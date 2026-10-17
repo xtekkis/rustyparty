@@ -91,6 +91,13 @@ impl Room {
             .find(|player| player.id == player_id)
     }
 
+    // Take a player out of the room, false if they weren't in it
+    pub fn remove_player(&mut self, player_id: u32) -> bool {
+        let count_before = self.players.len();
+        self.players.retain(|player| player.id != player_id);
+        self.players.len() < count_before
+    }
+
     // The lobby as everyone sees it
     pub fn lobby_message(&self) -> ServerMessage {
         let players = self
@@ -230,6 +237,18 @@ mod tests {
         assert!(is_valid_points_to_win(3));
         assert!(is_valid_points_to_win(15));
         assert!(!is_valid_points_to_win(16));
+    }
+
+    #[test]
+    fn player_can_be_removed() {
+        let mut room = Room::new("KXTP".to_string());
+        let alex = room.add_player("Alex".to_string(), None, test_sender()).id;
+        room.add_player("Sam".to_string(), None, test_sender());
+
+        assert!(room.remove_player(alex));
+        assert_eq!(room.players.len(), 1);
+        assert!(!room.has_nickname("Alex"));
+        assert!(!room.remove_player(alex));
     }
 
     #[test]

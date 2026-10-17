@@ -75,6 +75,7 @@ fn handle_text(
         Ok(ClientMessage::RoomSettings { points_to_win }) => {
             handle_room_settings(points_to_win, state, joined)
         }
+        Ok(ClientMessage::Leave) => handle_leave(state, joined),
         // Other messages are handled in later steps
         Ok(_) => None,
         Err(error) => {
@@ -209,6 +210,22 @@ fn handle_room_settings(
 
     room.settings.points_to_win = points_to_win;
     room.broadcast(&room.lobby_message());
+    None
+}
+
+// Take this connection's player out of their room
+fn handle_leave(state: &AppState, joined: &mut Option<(String, u32)>) -> Option<ServerMessage> {
+    // take() empties joined, so this connection can join a room again
+    let Some((code, player_id)) = joined.take() else {
+        return Some(error_message("not_joined", "Join a room first"));
+    };
+
+    let mut rooms = state.rooms.lock().unwrap();
+    if let Some(room) = rooms.get_mut(&code)
+        && room.remove_player(player_id)
+    {
+        tracing::info!("Player {player_id} left room {code}");
+    }
     None
 }
 
