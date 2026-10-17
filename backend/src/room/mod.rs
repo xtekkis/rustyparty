@@ -95,6 +95,12 @@ impl Room {
     pub fn remove_player(&mut self, player_id: u32) -> bool {
         let count_before = self.players.len();
         self.players.retain(|player| player.id != player_id);
+
+        // Players are kept in join order, so the first one left joined earliest
+        if self.host == Some(player_id) {
+            self.host = self.players.first().map(|player| player.id);
+        }
+
         self.players.len() < count_before
     }
 
@@ -249,6 +255,23 @@ mod tests {
         assert_eq!(room.players.len(), 1);
         assert!(!room.has_nickname("Alex"));
         assert!(!room.remove_player(alex));
+    }
+
+    #[test]
+    fn host_passes_to_next_earliest_player() {
+        let mut room = Room::new("KXTP".to_string());
+        let alex = room.add_player("Alex".to_string(), None, test_sender()).id;
+        let sam = room.add_player("Sam".to_string(), None, test_sender()).id;
+        let kim = room.add_player("Kim".to_string(), None, test_sender()).id;
+
+        room.remove_player(kim);
+        assert_eq!(room.host, Some(alex), "a guest leaving keeps the host");
+
+        room.remove_player(alex);
+        assert_eq!(room.host, Some(sam));
+
+        room.remove_player(sam);
+        assert_eq!(room.host, None, "an empty room has no host");
     }
 
     #[test]
