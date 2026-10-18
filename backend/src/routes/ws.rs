@@ -73,8 +73,8 @@ fn handle_text(
             room,
             nickname,
             avatar,
-            ..
-        }) => handle_join(room, nickname, avatar, state, joined, sender),
+            token,
+        }) => handle_join(room, nickname, avatar, token, state, joined, sender),
         Ok(ClientMessage::SetAvatar { avatar }) => handle_set_avatar(avatar, state, joined),
         Ok(ClientMessage::Ready { ready }) => handle_ready(ready, state, joined),
         Ok(ClientMessage::RoomSettings { points_to_win }) => {
@@ -99,6 +99,7 @@ fn handle_join(
     code: String,
     nickname: String,
     avatar: Option<String>,
+    token: Option<String>,
     state: &AppState,
     joined: &mut Option<(String, u32)>,
     sender: &UnboundedSender<ServerMessage>,
@@ -123,6 +124,9 @@ fn handle_join(
         let mut rooms = state.rooms.lock().unwrap();
         match rooms.get_mut(&code) {
             None => Err(error_message("room_not_found", "No room with that code")),
+            Some(room) if token.as_deref().is_some_and(|token| room.is_kicked(token)) => Err(
+                error_message("kicked_from_room", "You were removed from this room"),
+            ),
             Some(room) if room.has_nickname(&nickname) => {
                 Err(error_message("nickname_taken", "That nickname is taken"))
             }
@@ -240,16 +244,13 @@ fn handle_kick(
             "You can't kick yourself",
         ));
     }
-    let Some(target) = room.players.iter().find(|player| player.id == target_id) else {
+    if !room.kick_player(target_id) {
         return Some(error_message(
             "player_not_found",
             "That player isn't in the room",
         ));
-    };
+    }
 
-    // Tell them before removing them, their connection closes when it arrives
-    let _ = target.sender.send(ServerMessage::Kicked);
-    room.remove_player(target_id);
     tracing::info!("Player {target_id} was kicked from room {code}");
     room.broadcast(&room.lobby_message());
     None
