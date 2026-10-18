@@ -28,6 +28,9 @@ pub enum ClientMessage {
     Kick {
         player_id: u32,
     },
+    Ban {
+        player_id: u32,
+    },
     Leave,
 }
 
@@ -72,6 +75,7 @@ pub enum ServerMessage {
     },
     Replaced,
     Kicked,
+    Banned,
 }
 
 #[cfg(test)]

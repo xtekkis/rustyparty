@@ -48,8 +48,8 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                 if send_message(&mut socket, &outgoing).await.is_err() {
                     break;
                 }
-                // A kicked player's connection is closed by the server
-                if matches!(outgoing, ServerMessage::Kicked) {
+                // A kicked or banned player's connection is closed by the server
+                if matches!(outgoing, ServerMessage::Kicked | ServerMessage::Banned) {
                     let _ = socket.send(Message::Close(None)).await;
                     break;
                 }
@@ -80,7 +80,8 @@ fn handle_text(
         Ok(ClientMessage::RoomSettings { points_to_win }) => {
             handle_room_settings(points_to_win, state, joined)
         }
-        Ok(ClientMessage::Kick { player_id }) => handle_kick(player_id, state, joined),
+        Ok(ClientMessage::Kick { player_id }) => handle_remove(player_id, false, state, joined),
+        Ok(ClientMessage::Ban { player_id }) => handle_remove(player_id, true, state, joined),
         Ok(ClientMessage::Leave) => handle_leave(state, joined),
         // Other messages are handled in later steps
         Ok(_) => None,
@@ -124,8 +125,8 @@ fn handle_join(
         let mut rooms = state.rooms.lock().unwrap();
         match rooms.get_mut(&code) {
             None => Err(error_message("room_not_found", "No room with that code")),
-            Some(room) if token.as_deref().is_some_and(|token| room.is_kicked(token)) => Err(
-                error_message("kicked_from_room", "You were removed from this room"),
+            Some(room) if token.as_deref().is_some_and(|token| room.is_banned(token)) => Err(
+                error_message("banned_from_room", "You were banned from this room"),
             ),
             Some(room) if room.has_nickname(&nickname) => {
                 Err(error_message("nickname_taken", "That nickname is taken"))
@@ -223,9 +224,10 @@ fn handle_room_settings(
     None
 }
 
-// Host removes another player from the room
-fn handle_kick(
+// Host kicks or bans another player
+fn handle_remove(
     target_id: u32,
+    ban: bool,
     state: &AppState,
     joined: &Option<(String, u32)>,
 ) -> Option<ServerMessage> {
@@ -240,18 +242,25 @@ fn handle_kick(
     }
     if target_id == *player_id {
         return Some(error_message(
-            "cannot_kick_yourself",
-            "You can't kick yourself",
+            "cannot_remove_yourself",
+            "You can't remove yourself",
         ));
     }
-    if !room.kick_player(target_id) {
+
+    let removed = if ban {
+        room.ban_player(target_id)
+    } else {
+        room.kick_player(target_id)
+    };
+    if !removed {
         return Some(error_message(
             "player_not_found",
             "That player isn't in the room",
         ));
     }
 
-    tracing::info!("Player {target_id} was kicked from room {code}");
+    let action = if ban { "banned" } else { "kicked" };
+    tracing::info!("Player {target_id} was {action} from room {code}");
     room.broadcast(&room.lobby_message());
     None
 }

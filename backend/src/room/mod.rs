@@ -36,8 +36,8 @@ pub struct Room {
     // Player id of the host, none while the room is empty
     pub host: Option<u32>,
     pub settings: RoomSettings,
-    // Tokens of kicked players, they can't join this room again
-    kicked_tokens: HashSet<String>,
+    // Tokens of banned players, they can't join this room again
+    banned_tokens: HashSet<String>,
     next_player_id: u32,
 }
 
@@ -50,7 +50,7 @@ impl Room {
             settings: RoomSettings {
                 points_to_win: POINTS_TO_WIN_DEFAULT,
             },
-            kicked_tokens: HashSet::new(),
+            banned_tokens: HashSet::new(),
             next_player_id: 1,
         }
     }
@@ -109,19 +109,35 @@ impl Room {
         self.players.len() < count_before
     }
 
-    // Tell a player they're kicked, block their token and remove them
+    // Remove a player, they can rejoin
     pub fn kick_player(&mut self, player_id: u32) -> bool {
-        let Some(player) = self.players.iter().find(|player| player.id == player_id) else {
-            return false;
-        };
-        // Their connection closes when this arrives
-        let _ = player.sender.send(ServerMessage::Kicked);
-        self.kicked_tokens.insert(player.token.clone());
-        self.remove_player(player_id)
+        self.send_and_remove(player_id, ServerMessage::Kicked)
+            .is_some()
     }
 
-    pub fn is_kicked(&self, token: &str) -> bool {
-        self.kicked_tokens.contains(token)
+    // Remove a player and block their token from rejoining
+    pub fn ban_player(&mut self, player_id: u32) -> bool {
+        match self.send_and_remove(player_id, ServerMessage::Banned) {
+            Some(token) => {
+                self.banned_tokens.insert(token);
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn is_banned(&self, token: &str) -> bool {
+        self.banned_tokens.contains(token)
+    }
+
+    // Tell a player why they're removed, then remove them and return their token
+    fn send_and_remove(&mut self, player_id: u32, message: ServerMessage) -> Option<String> {
+        let player = self.players.iter().find(|player| player.id == player_id)?;
+        // Their connection closes when this arrives
+        let _ = player.sender.send(message);
+        let token = player.token.clone();
+        self.remove_player(player_id);
+        Some(token)
     }
 
     // The lobby as everyone sees it
@@ -295,7 +311,7 @@ mod tests {
     }
 
     #[test]
-    fn kicked_player_is_told_removed_and_blocked() {
+    fn kicked_player_is_told_and_can_rejoin() {
         let mut room = Room::new("KXTP".to_string());
         let (sender, mut receiver) = mpsc::unbounded_channel();
         let sam = room.add_player("Sam".to_string(), None, sender);
@@ -304,9 +320,23 @@ mod tests {
         assert!(room.kick_player(sam_id));
         assert!(matches!(receiver.try_recv(), Ok(ServerMessage::Kicked)));
         assert!(room.players.is_empty());
-        assert!(room.is_kicked(&sam_token));
-        assert!(!room.is_kicked("some-other-token"));
+        assert!(!room.is_banned(&sam_token));
         assert!(!room.kick_player(sam_id));
+    }
+
+    #[test]
+    fn banned_player_is_told_and_blocked() {
+        let mut room = Room::new("KXTP".to_string());
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let sam = room.add_player("Sam".to_string(), None, sender);
+        let (sam_id, sam_token) = (sam.id, sam.token.clone());
+
+        assert!(room.ban_player(sam_id));
+        assert!(matches!(receiver.try_recv(), Ok(ServerMessage::Banned)));
+        assert!(room.players.is_empty());
+        assert!(room.is_banned(&sam_token));
+        assert!(!room.is_banned("some-other-token"));
+        assert!(!room.ban_player(sam_id));
     }
 
     #[test]
