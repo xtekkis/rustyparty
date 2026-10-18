@@ -111,7 +111,7 @@ fn handle_text(
     }
 }
 
-// Add this connection's player to a room
+// Add this connection's player to a room, or give a returning player their seat back
 fn handle_join(
     code: String,
     nickname: String,
@@ -124,6 +124,34 @@ fn handle_join(
     if joined.is_some() {
         return Some(error_message("already_joined", "You are already in a room"));
     }
+
+    // Accept lowercase codes too
+    let code = code.to_uppercase();
+    // Everything below happens under one lock so two phones can't take the same seat or nickname
+    let mut rooms = state.rooms.lock().unwrap();
+    let Some(room) = rooms.get_mut(&code) else {
+        return Some(error_message("room_not_found", "No room with that code"));
+    };
+
+    // A saved token means this phone was here before
+    if let Some(token) = token {
+        if room.is_banned(&token) {
+            return Some(error_message(
+                "banned_from_room",
+                "You were banned from this room",
+            ));
+        }
+        if let Some(id) = room.reconnect(&token, sender.clone()) {
+            tracing::info!("Player {id} reconnected to room {code}");
+            room.broadcast(&room.lobby_message());
+            *joined = Some((code, id));
+            return Some(ServerMessage::Welcome {
+                player_id: id,
+                token,
+            });
+        }
+    }
+
     let Some(nickname) = clean_nickname(&nickname) else {
         return Some(error_message(
             "invalid_nickname",
@@ -133,40 +161,19 @@ fn handle_join(
     if !is_known_avatar(avatar.as_deref()) {
         return Some(error_message("unknown_avatar", "That avatar doesn't exist"));
     }
-
-    // Accept lowercase codes too
-    let code = code.to_uppercase();
-    // Check and add under one lock so two players can't take the same nickname
-    let result = {
-        let mut rooms = state.rooms.lock().unwrap();
-        match rooms.get_mut(&code) {
-            None => Err(error_message("room_not_found", "No room with that code")),
-            Some(room) if token.as_deref().is_some_and(|token| room.is_banned(token)) => Err(
-                error_message("banned_from_room", "You were banned from this room"),
-            ),
-            Some(room) if room.has_nickname(&nickname) => {
-                Err(error_message("nickname_taken", "That nickname is taken"))
-            }
-            Some(room) => {
-                let player = room.add_player(nickname, avatar, sender.clone());
-                let new_player = (player.id, player.token.clone());
-                room.broadcast(&room.lobby_message());
-                Ok(new_player)
-            }
-        }
-    };
-
-    match result {
-        Ok((id, token)) => {
-            tracing::info!("Player {id} joined room {code}");
-            *joined = Some((code, id));
-            Some(ServerMessage::Welcome {
-                player_id: id,
-                token,
-            })
-        }
-        Err(reply) => Some(reply),
+    if room.has_nickname(&nickname) {
+        return Some(error_message("nickname_taken", "That nickname is taken"));
     }
+
+    let player = room.add_player(nickname, avatar, sender.clone());
+    let (id, token) = (player.id, player.token.clone());
+    tracing::info!("Player {id} joined room {code}");
+    room.broadcast(&room.lobby_message());
+    *joined = Some((code, id));
+    Some(ServerMessage::Welcome {
+        player_id: id,
+        token,
+    })
 }
 
 // Change this connection's avatar and show it to everyone

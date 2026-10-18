@@ -110,6 +110,21 @@ impl Room {
         self.players.len() < count_before
     }
 
+    // Give a returning player their seat back, with messages going to their new connection
+    pub fn reconnect(
+        &mut self,
+        token: &str,
+        sender: UnboundedSender<ServerMessage>,
+    ) -> Option<u32> {
+        let player = self
+            .players
+            .iter_mut()
+            .find(|player| player.token == token)?;
+        player.connected = true;
+        player.sender = sender;
+        Some(player.id)
+    }
+
     // Remove a player, they can rejoin
     pub fn kick_player(&mut self, player_id: u32) -> bool {
         self.send_and_remove(player_id, ServerMessage::Kicked)
@@ -355,6 +370,35 @@ mod tests {
         };
         let connected: Vec<bool> = players.iter().map(|player| player.connected).collect();
         assert_eq!(connected, [false, true]);
+    }
+
+    #[test]
+    fn reconnect_restores_the_seat() {
+        let mut room = Room::new("KXTP".to_string());
+        let sam = room.add_player("Sam".to_string(), Some("owl".to_string()), test_sender());
+        let (sam_id, sam_token) = (sam.id, sam.token.clone());
+        room.player_mut(sam_id)
+            .expect("Sam is in the room")
+            .connected = false;
+
+        let (new_sender, mut new_receiver) = mpsc::unbounded_channel();
+        assert_eq!(room.reconnect(&sam_token, new_sender), Some(sam_id));
+
+        let sam = &room.players[0];
+        assert!(sam.connected);
+        assert_eq!(sam.avatar.as_deref(), Some("owl"));
+        room.broadcast(&room.lobby_message());
+        assert!(
+            new_receiver.try_recv().is_ok(),
+            "messages reach the new connection"
+        );
+    }
+
+    #[test]
+    fn unknown_token_does_not_reconnect() {
+        let mut room = Room::new("KXTP".to_string());
+        room.add_player("Sam".to_string(), None, test_sender());
+        assert_eq!(room.reconnect("not-a-real-token", test_sender()), None);
     }
 
     #[test]
