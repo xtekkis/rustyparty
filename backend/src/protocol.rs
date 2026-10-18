@@ -41,6 +41,7 @@ pub struct LobbyPlayer {
     pub nickname: String,
     pub avatar: Option<String>,
     pub ready: bool,
+    pub connected: bool,
 }
 
 // Room settings the host can change

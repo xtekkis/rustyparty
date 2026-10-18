@@ -58,8 +58,24 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
     }
 
     tracing::debug!("WebSocket disconnected");
+
+    // Keep the seat, the player can come back with their token
+    if let Some((code, player_id)) = joined {
+        handle_disconnect(&state, &code, player_id);
+    }
 }
 
+// Mark the player as disconnected and tell the room
+fn handle_disconnect(state: &AppState, code: &str, player_id: u32) {
+    let mut rooms = state.rooms.lock().unwrap();
+    if let Some(room) = rooms.get_mut(code)
+        && let Some(player) = room.player_mut(player_id)
+    {
+        player.connected = false;
+        tracing::info!("Player {player_id} disconnected from room {code}");
+        room.broadcast(&room.lobby_message());
+    }
+}
 // Handle one message from the phone and return the reply, if any
 fn handle_text(
     text: &str,

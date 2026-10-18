@@ -83,6 +83,7 @@ impl Room {
             nickname,
             avatar,
             ready: false,
+            connected: true,
             token: generate_token(),
             sender,
         });
@@ -150,6 +151,7 @@ impl Room {
                 nickname: player.nickname.clone(),
                 avatar: player.avatar.clone(),
                 ready: player.ready,
+                connected: player.connected,
             })
             .collect();
         ServerMessage::Lobby {
@@ -337,6 +339,22 @@ mod tests {
         assert!(room.is_banned(&sam_token));
         assert!(!room.is_banned("some-other-token"));
         assert!(!room.ban_player(sam_id));
+    }
+
+    #[test]
+    fn lobby_shows_disconnected_players() {
+        let mut room = Room::new("KXTP".to_string());
+        let alex = room.add_player("Alex".to_string(), None, test_sender()).id;
+        room.add_player("Sam".to_string(), None, test_sender());
+        room.player_mut(alex)
+            .expect("Alex is in the room")
+            .connected = false;
+
+        let ServerMessage::Lobby { players, .. } = room.lobby_message() else {
+            panic!("expected a lobby message");
+        };
+        let connected: Vec<bool> = players.iter().map(|player| player.connected).collect();
+        assert_eq!(connected, [false, true]);
     }
 
     #[test]

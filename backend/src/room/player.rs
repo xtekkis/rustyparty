@@ -12,6 +12,8 @@ pub struct Player {
     pub avatar: Option<String>,
     // Ready to start the game vote
     pub ready: bool,
+    // False while their phone is disconnected, the seat is kept
+    pub connected: bool,
     pub token: String,
     // Messages for this player's connection
     pub sender: UnboundedSender<ServerMessage>,
