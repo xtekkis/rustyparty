@@ -79,6 +79,16 @@ pub enum ServerMessage {
     Banned,
 }
 
+impl ServerMessage {
+    // Error with a fixed code for the app and a text to show
+    pub fn error(code: &str, message: &str) -> ServerMessage {
+        ServerMessage::Error {
+            code: code.to_string(),
+            message: message.to_string(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
