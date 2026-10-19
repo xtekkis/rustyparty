@@ -122,7 +122,11 @@ impl Room {
             .iter_mut()
             .find(|player| player.token == token)?;
         player.disconnected_since = None;
-        player.sender = sender;
+
+        // The newest connection wins, an older one still open is told and closes
+        let old_sender = std::mem::replace(&mut player.sender, sender);
+        let _ = old_sender.send(ServerMessage::Replaced);
+
         Some(player.id)
     }
 
@@ -402,6 +406,28 @@ mod tests {
         assert!(
             new_receiver.try_recv().is_ok(),
             "messages reach the new connection"
+        );
+    }
+
+    #[test]
+    fn newest_connection_replaces_the_old_one() {
+        let mut room = Room::new("KXTP".to_string());
+        let (old_sender, mut old_receiver) = mpsc::unbounded_channel();
+        let sam = room.add_player("Sam".to_string(), None, old_sender);
+        let (sam_id, sam_token) = (sam.id, sam.token.clone());
+
+        let (new_sender, mut new_receiver) = mpsc::unbounded_channel();
+        assert_eq!(room.reconnect(&sam_token, new_sender), Some(sam_id));
+        assert!(matches!(
+            old_receiver.try_recv(),
+            Ok(ServerMessage::Replaced)
+        ));
+
+        room.broadcast(&room.lobby_message());
+        assert!(new_receiver.try_recv().is_ok());
+        assert!(
+            old_receiver.try_recv().is_err(),
+            "the old connection gets nothing more"
         );
     }
 

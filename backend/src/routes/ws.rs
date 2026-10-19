@@ -54,8 +54,11 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                 if send_message(&mut socket, &outgoing).await.is_err() {
                     break;
                 }
-                // A kicked or banned player's connection is closed by the server
-                if matches!(outgoing, ServerMessage::Kicked | ServerMessage::Banned) {
+                // Kicked, banned or replaced connections are closed by the server
+                if matches!(
+                    outgoing,
+                    ServerMessage::Kicked | ServerMessage::Banned | ServerMessage::Replaced
+                ) {
                     let _ = socket.send(Message::Close(None)).await;
                     break;
                 }
@@ -67,16 +70,23 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
 
     // Keep the seat, the player can come back with their token
     if let Some((code, player_id)) = joined {
-        handle_disconnect(&state, &code, player_id);
+        handle_disconnect(&state, &code, player_id, &sender);
     }
 }
 
 // Mark the player as disconnected, tell the room and start the grace period
-fn handle_disconnect(state: &AppState, code: &str, player_id: u32) {
+fn handle_disconnect(
+    state: &AppState,
+    code: &str,
+    player_id: u32,
+    sender: &UnboundedSender<ServerMessage>,
+) {
     let since = Instant::now();
     let mut rooms = state.rooms.lock().unwrap();
     if let Some(room) = rooms.get_mut(code)
         && let Some(player) = room.player_mut(player_id)
+        // Skip if a newer connection has taken over this seat
+        && player.sender.same_channel(sender)
     {
         player.disconnected_since = Some(since);
         tracing::info!("Player {player_id} disconnected from room {code}");
