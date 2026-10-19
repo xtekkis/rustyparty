@@ -5,11 +5,17 @@ use axum::{
     },
     response::Response,
 };
+use std::time::Duration;
+
 use tokio::sync::mpsc::{self, UnboundedSender};
+use tokio::time::Instant;
 
 use crate::AppState;
 use crate::protocol::{ClientMessage, ServerMessage};
 use crate::room::{clean_nickname, is_valid_points_to_win, player::is_known_avatar};
+
+// How long a disconnected player keeps their seat
+const DISCONNECT_GRACE: Duration = Duration::from_secs(90);
 
 // Upgrade the HTTP request to a WebSocket
 pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
@@ -65,17 +71,39 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
     }
 }
 
-// Mark the player as disconnected and tell the room
+// Mark the player as disconnected, tell the room and start the grace period
 fn handle_disconnect(state: &AppState, code: &str, player_id: u32) {
+    let since = Instant::now();
     let mut rooms = state.rooms.lock().unwrap();
     if let Some(room) = rooms.get_mut(code)
         && let Some(player) = room.player_mut(player_id)
     {
-        player.connected = false;
+        player.disconnected_since = Some(since);
         tracing::info!("Player {player_id} disconnected from room {code}");
+        room.broadcast(&room.lobby_message());
+
+        tokio::spawn(remove_after_grace(
+            state.clone(),
+            code.to_string(),
+            player_id,
+            since,
+        ));
+    }
+}
+
+// Remove the player if they haven't come back when the grace period ends
+async fn remove_after_grace(state: AppState, code: String, player_id: u32, since: Instant) {
+    tokio::time::sleep(DISCONNECT_GRACE).await;
+
+    let mut rooms = state.rooms.lock().unwrap();
+    if let Some(room) = rooms.get_mut(&code)
+        && room.remove_if_gone_since(player_id, since)
+    {
+        tracing::info!("Player {player_id} didn't come back and was removed from room {code}");
         room.broadcast(&room.lobby_message());
     }
 }
+
 // Handle one message from the phone and return the reply, if any
 fn handle_text(
     text: &str,

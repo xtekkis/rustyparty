@@ -1,5 +1,6 @@
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::time::Instant;
 
 use crate::protocol::ServerMessage;
 
@@ -12,8 +13,8 @@ pub struct Player {
     pub avatar: Option<String>,
     // Ready to start the game vote
     pub ready: bool,
-    // False while their phone is disconnected, the seat is kept
-    pub connected: bool,
+    // When their phone disconnected, none while connected. The seat is kept for a while
+    pub disconnected_since: Option<Instant>,
     pub token: String,
     // Messages for this player's connection
     pub sender: UnboundedSender<ServerMessage>,

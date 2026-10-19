@@ -4,6 +4,7 @@ pub mod player;
 use std::collections::HashSet;
 
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::time::Instant;
 
 use crate::protocol::{LobbyPlayer, RoomSettings, ServerMessage};
 use player::{Player, generate_token};
@@ -83,7 +84,7 @@ impl Room {
             nickname,
             avatar,
             ready: false,
-            connected: true,
+            disconnected_since: None,
             token: generate_token(),
             sender,
         });
@@ -120,9 +121,18 @@ impl Room {
             .players
             .iter_mut()
             .find(|player| player.token == token)?;
-        player.connected = true;
+        player.disconnected_since = None;
         player.sender = sender;
         Some(player.id)
+    }
+
+    // Remove a player whose grace period ran out, unless they came back since
+    pub fn remove_if_gone_since(&mut self, player_id: u32, since: Instant) -> bool {
+        let still_gone = self
+            .players
+            .iter()
+            .any(|player| player.id == player_id && player.disconnected_since == Some(since));
+        still_gone && self.remove_player(player_id)
     }
 
     // Remove a player, they can rejoin
@@ -166,7 +176,7 @@ impl Room {
                 nickname: player.nickname.clone(),
                 avatar: player.avatar.clone(),
                 ready: player.ready,
-                connected: player.connected,
+                connected: player.disconnected_since.is_none(),
             })
             .collect();
         ServerMessage::Lobby {
@@ -188,6 +198,7 @@ impl Room {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
     use tokio::sync::mpsc;
 
     // Messages sent to it are dropped, tests here don't read them
@@ -363,7 +374,7 @@ mod tests {
         room.add_player("Sam".to_string(), None, test_sender());
         room.player_mut(alex)
             .expect("Alex is in the room")
-            .connected = false;
+            .disconnected_since = Some(Instant::now());
 
         let ServerMessage::Lobby { players, .. } = room.lobby_message() else {
             panic!("expected a lobby message");
@@ -379,13 +390,13 @@ mod tests {
         let (sam_id, sam_token) = (sam.id, sam.token.clone());
         room.player_mut(sam_id)
             .expect("Sam is in the room")
-            .connected = false;
+            .disconnected_since = Some(Instant::now());
 
         let (new_sender, mut new_receiver) = mpsc::unbounded_channel();
         assert_eq!(room.reconnect(&sam_token, new_sender), Some(sam_id));
 
         let sam = &room.players[0];
-        assert!(sam.connected);
+        assert!(sam.disconnected_since.is_none());
         assert_eq!(sam.avatar.as_deref(), Some("owl"));
         room.broadcast(&room.lobby_message());
         assert!(
@@ -399,6 +410,54 @@ mod tests {
         let mut room = Room::new("KXTP".to_string());
         room.add_player("Sam".to_string(), None, test_sender());
         assert_eq!(room.reconnect("not-a-real-token", test_sender()), None);
+    }
+
+    // Disconnect a player now and return when
+    fn disconnect(room: &mut Room, player_id: u32) -> Instant {
+        let now = Instant::now();
+        room.player_mut(player_id)
+            .expect("player is in the room")
+            .disconnected_since = Some(now);
+        now
+    }
+
+    #[test]
+    fn player_still_gone_is_removed() {
+        let mut room = Room::new("KXTP".to_string());
+        let sam = room.add_player("Sam".to_string(), None, test_sender()).id;
+        let since = disconnect(&mut room, sam);
+
+        assert!(room.remove_if_gone_since(sam, since));
+        assert!(room.players.is_empty());
+    }
+
+    #[test]
+    fn player_who_came_back_is_kept() {
+        let mut room = Room::new("KXTP".to_string());
+        let sam = room.add_player("Sam".to_string(), None, test_sender());
+        let (sam_id, sam_token) = (sam.id, sam.token.clone());
+        let since = disconnect(&mut room, sam_id);
+        room.reconnect(&sam_token, test_sender());
+
+        assert!(!room.remove_if_gone_since(sam_id, since));
+        assert_eq!(room.players.len(), 1);
+    }
+
+    #[test]
+    fn old_timer_ignores_a_newer_disconnect() {
+        let mut room = Room::new("KXTP".to_string());
+        let sam = room.add_player("Sam".to_string(), None, test_sender());
+        let (sam_id, sam_token) = (sam.id, sam.token.clone());
+        let first = disconnect(&mut room, sam_id);
+        room.reconnect(&sam_token, test_sender());
+        // Set a clearly later time, two calls to now() can be equal
+        let second = first + Duration::from_secs(1);
+        room.player_mut(sam_id)
+            .expect("Sam is in the room")
+            .disconnected_since = Some(second);
+
+        assert!(!room.remove_if_gone_since(sam_id, first));
+        assert!(room.remove_if_gone_since(sam_id, second));
     }
 
     #[test]
