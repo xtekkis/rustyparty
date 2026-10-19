@@ -29,6 +29,7 @@ async fn main() {
         .init();
 
     let state = AppState::default();
+    tokio::spawn(room::delete_abandoned_rooms(state.rooms.clone()));
     let app = routes::router(state).layer(TraceLayer::new_for_http());
 
     // Port from PORT, default 3000
