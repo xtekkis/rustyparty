@@ -7,9 +7,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use crate::protocol::{LobbyPlayer, RoomSettings, ServerMessage};
+use actor::{RoomCommand, RoomHandle};
 use player::{Player, generate_token};
 
 const NICKNAME_MAX_LENGTH: usize = 16;
@@ -225,18 +227,29 @@ impl Room {
 }
 
 // Delete abandoned rooms every so often, runs for as long as the server does
-pub async fn delete_abandoned_rooms(rooms: Arc<Mutex<HashMap<String, Room>>>) {
+pub async fn delete_abandoned_rooms(rooms: Arc<Mutex<HashMap<String, RoomHandle>>>) {
     let mut interval = tokio::time::interval(CLEANUP_INTERVAL);
     loop {
         interval.tick().await;
         let now = Instant::now();
-        rooms.lock().unwrap().retain(|code, room| {
-            let abandoned = room.is_abandoned(now);
-            if abandoned {
+
+        // Copy the handles out so the lock isn't held while waiting for answers
+        let handles: Vec<(String, RoomHandle)> = rooms
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(code, room)| (code.clone(), room.clone()))
+            .collect();
+
+        for (code, room) in handles {
+            let (reply, answer) = oneshot::channel();
+            room.send(RoomCommand::IsAbandoned { now, reply }).await;
+            // No answer means the room's task already ended
+            if answer.await.unwrap_or(true) {
+                rooms.lock().unwrap().remove(&code);
                 tracing::info!("Deleted empty room {code}");
             }
-            !abandoned
-        });
+        }
     }
 }
 

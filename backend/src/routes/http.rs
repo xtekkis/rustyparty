@@ -4,10 +4,12 @@ use axum::{
     http::StatusCode,
 };
 use serde::Serialize;
+use tokio::sync::oneshot;
 
 use crate::AppState;
 use crate::error::AppError;
-use crate::room::{Room, code::generate_code};
+use crate::room::actor::{RoomCommand, RoomHandle};
+use crate::room::code::generate_code;
 
 // Health check
 pub async fn health() -> &'static str {
@@ -33,7 +35,7 @@ pub async fn create_room(State(state): State<AppState>) -> (StatusCode, Json<Cre
             }
         };
 
-        rooms.insert(code.clone(), Room::new(code.clone()));
+        rooms.insert(code.clone(), RoomHandle::spawn(code.clone()));
         code
     };
     tracing::info!("Created room {code}");
@@ -54,13 +56,14 @@ pub async fn get_room(
 ) -> Result<Json<RoomInfo>, AppError> {
     // Accept lowercase codes too
     let code = code.to_uppercase();
-    let rooms = state.rooms.lock().unwrap();
+    let room = state.rooms.lock().unwrap().get(&code).cloned();
+    let Some(room) = room else {
+        return Err(AppError::RoomNotFound);
+    };
 
-    match rooms.get(&code) {
-        Some(room) => Ok(Json(RoomInfo {
-            code: room.code.clone(),
-            players: room.players.len(),
-        })),
-        None => Err(AppError::RoomNotFound),
-    }
+    let (reply, players) = oneshot::channel();
+    room.send(RoomCommand::PlayerCount { reply }).await;
+    // No answer means the room just closed
+    let players = players.await.map_err(|_| AppError::RoomNotFound)?;
+    Ok(Json(RoomInfo { code, players }))
 }

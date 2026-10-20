@@ -5,32 +5,26 @@ use axum::{
     },
     response::Response,
 };
-use std::time::Duration;
-
-use tokio::sync::mpsc::{self, UnboundedSender};
-use tokio::time::Instant;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::AppState;
 use crate::protocol::{ClientMessage, ServerMessage};
-use crate::room::{clean_nickname, is_valid_points_to_win, player::is_known_avatar};
-
-// How long a disconnected player keeps their seat
-const DISCONNECT_GRACE: Duration = Duration::from_secs(90);
+use crate::room::actor::{Connection, RoomCommand, RoomHandle};
 
 // Upgrade the HTTP request to a WebSocket
 pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 
-// One player's connection: read from the phone and forward messages from the server
+// One player's connection: read from the phone and forward messages from their room
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
     tracing::debug!("WebSocket connected");
 
-    // Other parts of the server send to this player through the sender
+    // The room sends to this player through the sender
     let (sender, mut receiver) = mpsc::unbounded_channel::<ServerMessage>();
 
-    // Room code and player id, once this connection has joined
-    let mut joined: Option<(String, u32)> = None;
+    // The room and player id, once this connection has joined
+    let mut joined: Option<(RoomHandle, u32)> = None;
 
     loop {
         tokio::select! {
@@ -43,7 +37,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                     continue;
                 };
 
-                let reply = handle_text(&text, &state, &mut joined, &sender);
+                let reply = handle_text(&text, &state, &mut joined, &sender).await;
                 if let Some(reply) = reply
                     && send_message(&mut socket, &reply).await.is_err()
                 {
@@ -69,286 +63,130 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
     tracing::debug!("WebSocket disconnected");
 
     // Keep the seat, the player can come back with their token
-    if let Some((code, player_id)) = joined {
-        handle_disconnect(&state, &code, player_id, &sender);
-    }
-}
-
-// Mark the player as disconnected, tell the room and start the grace period
-fn handle_disconnect(
-    state: &AppState,
-    code: &str,
-    player_id: u32,
-    sender: &UnboundedSender<ServerMessage>,
-) {
-    let since = Instant::now();
-    let mut rooms = state.rooms.lock().unwrap();
-    if let Some(room) = rooms.get_mut(code)
-        && let Some(player) = room.player_mut(player_id)
-        // Skip if a newer connection has taken over this seat
-        && player.sender.same_channel(sender)
-    {
-        player.disconnected_since = Some(since);
-        tracing::info!("Player {player_id} disconnected from room {code}");
-        room.broadcast(&room.lobby_message());
-
-        tokio::spawn(remove_after_grace(
-            state.clone(),
-            code.to_string(),
+    if let Some((room, player_id)) = joined {
+        room.send(RoomCommand::Disconnect {
             player_id,
-            since,
-        ));
+            connection: sender,
+        })
+        .await;
     }
 }
 
-// Remove the player if they haven't come back when the grace period ends
-async fn remove_after_grace(state: AppState, code: String, player_id: u32, since: Instant) {
-    tokio::time::sleep(DISCONNECT_GRACE).await;
-
-    let mut rooms = state.rooms.lock().unwrap();
-    if let Some(room) = rooms.get_mut(&code)
-        && room.remove_if_gone_since(player_id, since)
-    {
-        tracing::info!("Player {player_id} didn't come back and was removed from room {code}");
-        room.broadcast(&room.lobby_message());
-    }
-}
-
-// Handle one message from the phone and return the reply, if any
-fn handle_text(
+// Turn one message from the phone into a command for their room.
+// The room sends its own replies, only connection errors are returned here
+async fn handle_text(
     text: &str,
     state: &AppState,
-    joined: &mut Option<(String, u32)>,
-    sender: &UnboundedSender<ServerMessage>,
+    joined: &mut Option<(RoomHandle, u32)>,
+    sender: &Connection,
 ) -> Option<ServerMessage> {
     // Don't log message contents, they can hold session tokens
-    match serde_json::from_str::<ClientMessage>(text) {
-        Ok(ClientMessage::Join {
+    let message = match serde_json::from_str::<ClientMessage>(text) {
+        Ok(message) => message,
+        Err(error) => {
+            tracing::debug!("Received invalid JSON: {error}");
+            return Some(ServerMessage::error(
+                "invalid_message",
+                "Could not read that message",
+            ));
+        }
+    };
+
+    match message {
+        ClientMessage::Join {
             room,
             nickname,
             avatar,
             token,
-        }) => handle_join(room, nickname, avatar, token, state, joined, sender),
-        Ok(ClientMessage::SetAvatar { avatar }) => handle_set_avatar(avatar, state, joined),
-        Ok(ClientMessage::Ready { ready }) => handle_ready(ready, state, joined),
-        Ok(ClientMessage::RoomSettings { points_to_win }) => {
-            handle_room_settings(points_to_win, state, joined)
+        } => join(room, nickname, avatar, token, state, joined, sender).await,
+        ClientMessage::Leave => {
+            // take() empties joined, so this connection can join a room again
+            let Some((room, player_id)) = joined.take() else {
+                return Some(not_joined());
+            };
+            room.send(RoomCommand::Leave { player_id }).await;
+            None
         }
-        Ok(ClientMessage::Kick { player_id }) => handle_remove(player_id, false, state, joined),
-        Ok(ClientMessage::Ban { player_id }) => handle_remove(player_id, true, state, joined),
-        Ok(ClientMessage::Leave) => handle_leave(state, joined),
-        // Other messages are handled in later steps
-        Ok(_) => None,
-        Err(error) => {
-            tracing::debug!("Received invalid JSON: {error}");
-            Some(error_message(
-                "invalid_message",
-                "Could not read that message",
-            ))
+        message => {
+            let Some((room, player_id)) = joined else {
+                return Some(not_joined());
+            };
+            let player_id = *player_id;
+            let command = match message {
+                ClientMessage::SetAvatar { avatar } => RoomCommand::SetAvatar { player_id, avatar },
+                ClientMessage::Ready { ready } => RoomCommand::Ready { player_id, ready },
+                ClientMessage::RoomSettings { points_to_win } => RoomCommand::SetPointsToWin {
+                    player_id,
+                    points_to_win,
+                },
+                ClientMessage::Kick {
+                    player_id: target_id,
+                } => RoomCommand::Remove {
+                    player_id,
+                    target_id,
+                    ban: false,
+                },
+                ClientMessage::Ban {
+                    player_id: target_id,
+                } => RoomCommand::Remove {
+                    player_id,
+                    target_id,
+                    ban: true,
+                },
+                // Other messages are handled in later steps
+                _ => return None,
+            };
+            room.send(command).await;
+            None
         }
     }
 }
 
-// Add this connection's player to a room, or give a returning player their seat back
-fn handle_join(
+// Find the room and ask it to let this connection in
+async fn join(
     code: String,
     nickname: String,
     avatar: Option<String>,
     token: Option<String>,
     state: &AppState,
-    joined: &mut Option<(String, u32)>,
-    sender: &UnboundedSender<ServerMessage>,
+    joined: &mut Option<(RoomHandle, u32)>,
+    sender: &Connection,
 ) -> Option<ServerMessage> {
     if joined.is_some() {
-        return Some(error_message("already_joined", "You are already in a room"));
+        return Some(ServerMessage::error(
+            "already_joined",
+            "You are already in a room",
+        ));
     }
 
     // Accept lowercase codes too
     let code = code.to_uppercase();
-    // Everything below happens under one lock so two phones can't take the same seat or nickname
-    let mut rooms = state.rooms.lock().unwrap();
-    let Some(room) = rooms.get_mut(&code) else {
-        return Some(error_message("room_not_found", "No room with that code"));
-    };
-
-    // A saved token means this phone was here before
-    if let Some(token) = token {
-        if room.is_banned(&token) {
-            return Some(error_message(
-                "banned_from_room",
-                "You were banned from this room",
-            ));
-        }
-        if let Some(id) = room.reconnect(&token, sender.clone()) {
-            tracing::info!("Player {id} reconnected to room {code}");
-            room.broadcast(&room.lobby_message());
-            *joined = Some((code, id));
-            return Some(ServerMessage::Welcome {
-                player_id: id,
-                token,
-            });
-        }
-    }
-
-    let Some(nickname) = clean_nickname(&nickname) else {
-        return Some(error_message(
-            "invalid_nickname",
-            "Nickname must be 1 to 16 characters",
+    let room = state.rooms.lock().unwrap().get(&code).cloned();
+    let Some(room) = room else {
+        return Some(ServerMessage::error(
+            "room_not_found",
+            "No room with that code",
         ));
     };
-    if !is_known_avatar(avatar.as_deref()) {
-        return Some(error_message("unknown_avatar", "That avatar doesn't exist"));
-    }
-    if room.has_nickname(&nickname) {
-        return Some(error_message("nickname_taken", "That nickname is taken"));
-    }
 
-    let player = room.add_player(nickname, avatar, sender.clone());
-    let (id, token) = (player.id, player.token.clone());
-    tracing::info!("Player {id} joined room {code}");
-    room.broadcast(&room.lobby_message());
-    *joined = Some((code, id));
-    Some(ServerMessage::Welcome {
-        player_id: id,
+    // The room sends the welcome or an error to the phone itself
+    let (reply, player_id) = oneshot::channel();
+    room.send(RoomCommand::Join {
+        nickname,
+        avatar,
         token,
+        connection: sender.clone(),
+        reply,
     })
-}
-
-// Change this connection's avatar and show it to everyone
-fn handle_set_avatar(
-    avatar: Option<String>,
-    state: &AppState,
-    joined: &Option<(String, u32)>,
-) -> Option<ServerMessage> {
-    let Some((code, player_id)) = joined else {
-        return Some(error_message("not_joined", "Join a room first"));
-    };
-    if !is_known_avatar(avatar.as_deref()) {
-        return Some(error_message("unknown_avatar", "That avatar doesn't exist"));
-    }
-
-    let mut rooms = state.rooms.lock().unwrap();
-    if let Some(room) = rooms.get_mut(code)
-        && let Some(player) = room.player_mut(*player_id)
-    {
-        player.avatar = avatar;
-        room.broadcast(&room.lobby_message());
+    .await;
+    if let Ok(Some(player_id)) = player_id.await {
+        *joined = Some((room, player_id));
     }
     None
 }
 
-// Mark this connection's player as ready or not
-fn handle_ready(
-    ready: bool,
-    state: &AppState,
-    joined: &Option<(String, u32)>,
-) -> Option<ServerMessage> {
-    let Some((code, player_id)) = joined else {
-        return Some(error_message("not_joined", "Join a room first"));
-    };
-
-    let mut rooms = state.rooms.lock().unwrap();
-    if let Some(room) = rooms.get_mut(code)
-        && let Some(player) = room.player_mut(*player_id)
-    {
-        player.ready = ready;
-        tracing::debug!("Player {player_id} ready: {ready}");
-        room.broadcast(&room.lobby_message());
-    }
-    None
-}
-
-// Host changes how many points win the game
-fn handle_room_settings(
-    points_to_win: u8,
-    state: &AppState,
-    joined: &Option<(String, u32)>,
-) -> Option<ServerMessage> {
-    let Some((code, player_id)) = joined else {
-        return Some(error_message("not_joined", "Join a room first"));
-    };
-    if !is_valid_points_to_win(points_to_win) {
-        return Some(error_message(
-            "invalid_points_to_win",
-            "Points to win must be 3 to 15",
-        ));
-    }
-
-    let mut rooms = state.rooms.lock().unwrap();
-    let room = rooms.get_mut(code)?;
-    if room.host != Some(*player_id) {
-        return Some(error_message("not_host", "Only the host can do that"));
-    }
-
-    room.settings.points_to_win = points_to_win;
-    room.broadcast(&room.lobby_message());
-    None
-}
-
-// Host kicks or bans another player
-fn handle_remove(
-    target_id: u32,
-    ban: bool,
-    state: &AppState,
-    joined: &Option<(String, u32)>,
-) -> Option<ServerMessage> {
-    let Some((code, player_id)) = joined else {
-        return Some(error_message("not_joined", "Join a room first"));
-    };
-
-    let mut rooms = state.rooms.lock().unwrap();
-    let room = rooms.get_mut(code)?;
-    if room.host != Some(*player_id) {
-        return Some(error_message("not_host", "Only the host can do that"));
-    }
-    if target_id == *player_id {
-        return Some(error_message(
-            "cannot_remove_yourself",
-            "You can't remove yourself",
-        ));
-    }
-
-    let removed = if ban {
-        room.ban_player(target_id)
-    } else {
-        room.kick_player(target_id)
-    };
-    if !removed {
-        return Some(error_message(
-            "player_not_found",
-            "That player isn't in the room",
-        ));
-    }
-
-    let action = if ban { "banned" } else { "kicked" };
-    tracing::info!("Player {target_id} was {action} from room {code}");
-    room.broadcast(&room.lobby_message());
-    None
-}
-
-// Take this connection's player out of their room
-fn handle_leave(state: &AppState, joined: &mut Option<(String, u32)>) -> Option<ServerMessage> {
-    // take() empties joined, so this connection can join a room again
-    let Some((code, player_id)) = joined.take() else {
-        return Some(error_message("not_joined", "Join a room first"));
-    };
-
-    let mut rooms = state.rooms.lock().unwrap();
-    if let Some(room) = rooms.get_mut(&code)
-        && room.remove_player(player_id)
-    {
-        tracing::info!("Player {player_id} left room {code}");
-        room.broadcast(&room.lobby_message());
-    }
-    None
-}
-
-// Error message with a fixed code and a text to show
-fn error_message(code: &str, message: &str) -> ServerMessage {
-    ServerMessage::Error {
-        code: code.to_string(),
-        message: message.to_string(),
-    }
+fn not_joined() -> ServerMessage {
+    ServerMessage::error("not_joined", "Join a room first")
 }
 
 // Send one message to this player as JSON

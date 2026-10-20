@@ -10,12 +10,12 @@ mod protocol;
 mod room;
 mod routes;
 
-use room::Room;
+use room::actor::RoomHandle;
 
-// Shared by all requests: rooms by code
+// Shared by all requests: how to reach each room, by code
 #[derive(Clone, Default)]
 struct AppState {
-    rooms: Arc<Mutex<HashMap<String, Room>>>,
+    rooms: Arc<Mutex<HashMap<String, RoomHandle>>>,
 }
 
 #[tokio::main]
