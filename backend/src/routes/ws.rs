@@ -163,10 +163,7 @@ async fn join(
     let code = code.to_uppercase();
     let room = state.rooms.lock().unwrap().get(&code).cloned();
     let Some(room) = room else {
-        return Some(ServerMessage::error(
-            "room_not_found",
-            "No room with that code",
-        ));
+        return Some(room_not_found());
     };
 
     // The room sends the welcome or an error to the phone itself
@@ -179,10 +176,19 @@ async fn join(
         reply,
     })
     .await;
-    if let Ok(Some(player_id)) = player_id.await {
-        *joined = Some((room, player_id));
+    match player_id.await {
+        Ok(Some(player_id)) => {
+            *joined = Some((room, player_id));
+            None
+        }
+        Ok(None) => None,
+        // The room deleted itself before it could answer
+        Err(_) => Some(room_not_found()),
     }
-    None
+}
+
+fn room_not_found() -> ServerMessage {
+    ServerMessage::error("room_not_found", "No room with that code")
 }
 
 fn not_joined() -> ServerMessage {

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::sync::mpsc::{self, UnboundedSender, WeakSender};
@@ -13,6 +15,12 @@ const COMMAND_QUEUE_SIZE: usize = 64;
 
 // How long a disconnected player keeps their seat
 const DISCONNECT_GRACE: Duration = Duration::from_secs(90);
+
+// A room with nobody connected for this long deletes itself
+const EMPTY_ROOM_LIFETIME: Duration = Duration::from_secs(5 * 60);
+
+// All rooms by code, shared by the whole server
+pub type RoomMap = Arc<Mutex<HashMap<String, RoomHandle>>>;
 
 // Messages to one player's phone
 pub type Connection = UnboundedSender<ServerMessage>;
@@ -60,9 +68,9 @@ pub enum RoomCommand {
     PlayerCount {
         reply: oneshot::Sender<usize>,
     },
-    IsAbandoned {
-        now: Instant,
-        reply: oneshot::Sender<bool>,
+    // Sent by the room to itself when it has been empty for a while
+    EmptyTimeout {
+        since: Instant,
     },
 }
 
@@ -74,9 +82,14 @@ pub struct RoomHandle {
 
 impl RoomHandle {
     // Start the task for a new room
-    pub fn spawn(code: String) -> RoomHandle {
+    pub fn spawn(code: String, rooms: RoomMap) -> RoomHandle {
         let (commands, receiver) = mpsc::channel(COMMAND_QUEUE_SIZE);
-        tokio::spawn(run_room(Room::new(code), receiver, commands.downgrade()));
+        tokio::spawn(run_room(
+            Room::new(code),
+            receiver,
+            commands.downgrade(),
+            rooms,
+        ));
         RoomHandle { commands }
     }
 
@@ -86,15 +99,30 @@ impl RoomHandle {
     }
 }
 
-// The room's task: handle commands one at a time, until nobody can send any more
+// The room's task: handle commands one at a time, until the room deletes itself
 async fn run_room(
     mut room: Room,
     mut commands: mpsc::Receiver<RoomCommand>,
     // Weak, so the room doesn't keep itself alive
     me: WeakSender<RoomCommand>,
+    rooms: RoomMap,
 ) {
+    // A new room starts empty
+    room.watch_if_empty(&me);
+
     while let Some(command) = commands.recv().await {
+        if let RoomCommand::EmptyTimeout { since } = command {
+            // Still empty since that same moment, so nobody came back
+            if room.empty_since == Some(since) {
+                rooms.lock().unwrap().remove(&room.code);
+                tracing::info!("Deleted empty room {}", room.code);
+                break;
+            }
+            continue;
+        }
+
         room.handle(command, &me);
+        room.watch_if_empty(&me);
     }
 }
 
@@ -139,9 +167,8 @@ impl Room {
             RoomCommand::PlayerCount { reply } => {
                 let _ = reply.send(self.players.len());
             }
-            RoomCommand::IsAbandoned { now, reply } => {
-                let _ = reply.send(self.is_abandoned(now));
-            }
+            // Handled in run_room
+            RoomCommand::EmptyTimeout { .. } => {}
         }
     }
 
@@ -301,16 +328,31 @@ impl Room {
         tracing::info!("Player {player_id} disconnected from room {}", self.code);
         self.broadcast(&self.lobby_message());
 
-        // Remind the room when the grace period ends
-        let me = me.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(DISCONNECT_GRACE).await;
-            if let Some(commands) = me.upgrade() {
-                let _ = commands
-                    .send(RoomCommand::GraceOver { player_id, since })
-                    .await;
-            }
-        });
+        remind(
+            me,
+            DISCONNECT_GRACE,
+            RoomCommand::GraceOver { player_id, since },
+        );
+    }
+
+    // Start the countdown when the last connected player is gone, stop it when someone is back
+    fn watch_if_empty(&mut self, me: &WeakSender<RoomCommand>) {
+        let anyone_connected = self
+            .players
+            .iter()
+            .any(|player| player.disconnected_since.is_none());
+        if anyone_connected {
+            self.empty_since = None;
+            return;
+        }
+        // Already counting down
+        if self.empty_since.is_some() {
+            return;
+        }
+
+        let since = Instant::now();
+        self.empty_since = Some(since);
+        remind(me, EMPTY_ROOM_LIFETIME, RoomCommand::EmptyTimeout { since });
     }
 
     fn send_error(&self, player_id: u32, code: &str, message: &str) {
@@ -318,6 +360,17 @@ impl Room {
             send(&player.sender, ServerMessage::error(code, message));
         }
     }
+}
+
+// Send the room a command after a delay, unless the room is gone by then
+fn remind(me: &WeakSender<RoomCommand>, delay: Duration, command: RoomCommand) {
+    let me = me.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(delay).await;
+        if let Some(commands) = me.upgrade() {
+            let _ = commands.send(command).await;
+        }
+    });
 }
 
 // A closed connection can't receive, so ignore the error
@@ -349,6 +402,17 @@ mod tests {
         (player_id.await.unwrap(), messages)
     }
 
+    // A room registered in its own map, like the server does it
+    fn spawn_room() -> (RoomHandle, RoomMap) {
+        let rooms = RoomMap::default();
+        let room = RoomHandle::spawn("KXTP".to_string(), rooms.clone());
+        rooms
+            .lock()
+            .unwrap()
+            .insert("KXTP".to_string(), room.clone());
+        (room, rooms)
+    }
+
     async fn player_count(room: &RoomHandle) -> usize {
         let (reply, count) = oneshot::channel();
         room.send(RoomCommand::PlayerCount { reply }).await;
@@ -364,7 +428,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_gets_welcome_then_lobby() {
-        let room = RoomHandle::spawn("KXTP".to_string());
+        let (room, _rooms) = spawn_room();
         let (alex, mut messages) = join(&room, "Alex", None).await;
 
         assert_eq!(alex, Some(1));
@@ -380,7 +444,7 @@ mod tests {
 
     #[tokio::test]
     async fn taken_nickname_is_refused() {
-        let room = RoomHandle::spawn("KXTP".to_string());
+        let (room, _rooms) = spawn_room();
         join(&room, "Alex", None).await;
         let (player_id, mut messages) = join(&room, "alex", None).await;
 
@@ -390,7 +454,7 @@ mod tests {
 
     #[tokio::test]
     async fn only_the_host_can_kick() {
-        let room = RoomHandle::spawn("KXTP".to_string());
+        let (room, _rooms) = spawn_room();
         join(&room, "Alex", None).await;
         let (sam, mut sam_messages) = join(&room, "Sam", None).await;
         let sam = sam.unwrap();
@@ -410,7 +474,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn disconnected_player_is_removed_after_grace() {
-        let room = RoomHandle::spawn("KXTP".to_string());
+        let (room, _rooms) = spawn_room();
         let (connection, _messages) = mpsc::unbounded_channel();
         let (reply, player_id) = oneshot::channel();
         room.send(RoomCommand::Join {
@@ -437,5 +501,49 @@ mod tests {
 
         tokio::time::sleep(Duration::from_secs(2)).await;
         assert_eq!(player_count(&room).await, 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn empty_room_deletes_itself_after_5_minutes() {
+        let (room, rooms) = spawn_room();
+
+        tokio::time::sleep(EMPTY_ROOM_LIFETIME - Duration::from_secs(1)).await;
+        assert!(rooms.lock().unwrap().contains_key("KXTP"));
+
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert!(!rooms.lock().unwrap().contains_key("KXTP"));
+        assert!(
+            !room.send(RoomCommand::Leave { player_id: 1 }).await,
+            "the task has ended"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn room_with_a_connected_player_is_kept() {
+        let (room, rooms) = spawn_room();
+        let (_alex, _messages) = join(&room, "Alex", None).await;
+
+        tokio::time::sleep(EMPTY_ROOM_LIFETIME * 2).await;
+        assert!(rooms.lock().unwrap().contains_key("KXTP"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn someone_joining_stops_the_countdown() {
+        let (room, rooms) = spawn_room();
+        tokio::time::sleep(Duration::from_secs(200)).await;
+
+        // Alex is there from 200s to 300s, then the room is empty again
+        let (alex, _messages) = join(&room, "Alex", None).await;
+        tokio::time::sleep(Duration::from_secs(100)).await;
+        room.send(RoomCommand::Leave {
+            player_id: alex.unwrap(),
+        })
+        .await;
+
+        // The first countdown would have ended at 300s, the new one ends at 600s
+        tokio::time::sleep(Duration::from_secs(250)).await;
+        assert!(rooms.lock().unwrap().contains_key("KXTP"));
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        assert!(!rooms.lock().unwrap().contains_key("KXTP"));
     }
 }

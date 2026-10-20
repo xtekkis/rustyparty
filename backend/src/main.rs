@@ -1,6 +1,3 @@
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-
 use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
@@ -10,12 +7,12 @@ mod protocol;
 mod room;
 mod routes;
 
-use room::actor::RoomHandle;
+use room::actor::RoomMap;
 
 // Shared by all requests: how to reach each room, by code
 #[derive(Clone, Default)]
 struct AppState {
-    rooms: Arc<Mutex<HashMap<String, RoomHandle>>>,
+    rooms: RoomMap,
 }
 
 #[tokio::main]
@@ -29,7 +26,7 @@ async fn main() {
         .init();
 
     let state = AppState::default();
-    tokio::spawn(room::delete_abandoned_rooms(state.rooms.clone()));
+
     let app = routes::router(state).layer(TraceLayer::new_for_http());
 
     // Port from PORT, default 3000

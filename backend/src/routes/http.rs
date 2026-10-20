@@ -35,7 +35,8 @@ pub async fn create_room(State(state): State<AppState>) -> (StatusCode, Json<Cre
             }
         };
 
-        rooms.insert(code.clone(), RoomHandle::spawn(code.clone()));
+        let room = RoomHandle::spawn(code.clone(), state.rooms.clone());
+        rooms.insert(code.clone(), room);
         code
     };
     tracing::info!("Created room {code}");

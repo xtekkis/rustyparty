@@ -2,16 +2,12 @@ pub mod actor;
 pub mod code;
 pub mod player;
 
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::collections::HashSet;
 
 use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use crate::protocol::{LobbyPlayer, RoomSettings, ServerMessage};
-use actor::{RoomCommand, RoomHandle};
 use player::{Player, generate_token};
 
 const NICKNAME_MAX_LENGTH: usize = 16;
@@ -19,11 +15,6 @@ const NICKNAME_MAX_LENGTH: usize = 16;
 const POINTS_TO_WIN_DEFAULT: u8 = 7;
 const POINTS_TO_WIN_MIN: u8 = 3;
 const POINTS_TO_WIN_MAX: u8 = 15;
-
-// A room with nobody connected for this long is deleted
-const EMPTY_ROOM_LIFETIME: Duration = Duration::from_secs(5 * 60);
-// How often rooms are checked for that
-const CLEANUP_INTERVAL: Duration = Duration::from_secs(30);
 
 pub fn is_valid_points_to_win(points: u8) -> bool {
     (POINTS_TO_WIN_MIN..=POINTS_TO_WIN_MAX).contains(&points)
@@ -183,20 +174,6 @@ impl Room {
         Some(token)
     }
 
-    // True once nobody has been connected for 5 minutes
-    pub fn is_abandoned(&mut self, now: Instant) -> bool {
-        if self
-            .players
-            .iter()
-            .any(|player| player.disconnected_since.is_none())
-        {
-            self.empty_since = None;
-            return false;
-        }
-        let empty_since = *self.empty_since.get_or_insert(now);
-        now - empty_since >= EMPTY_ROOM_LIFETIME
-    }
-
     // The lobby as everyone sees it
     pub fn lobby_message(&self) -> ServerMessage {
         let players = self
@@ -222,33 +199,6 @@ impl Room {
         for player in &self.players {
             // A closed connection can't receive, so ignore the error
             let _ = player.sender.send(message.clone());
-        }
-    }
-}
-
-// Delete abandoned rooms every so often, runs for as long as the server does
-pub async fn delete_abandoned_rooms(rooms: Arc<Mutex<HashMap<String, RoomHandle>>>) {
-    let mut interval = tokio::time::interval(CLEANUP_INTERVAL);
-    loop {
-        interval.tick().await;
-        let now = Instant::now();
-
-        // Copy the handles out so the lock isn't held while waiting for answers
-        let handles: Vec<(String, RoomHandle)> = rooms
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|(code, room)| (code.clone(), room.clone()))
-            .collect();
-
-        for (code, room) in handles {
-            let (reply, answer) = oneshot::channel();
-            room.send(RoomCommand::IsAbandoned { now, reply }).await;
-            // No answer means the room's task already ended
-            if answer.await.unwrap_or(true) {
-                rooms.lock().unwrap().remove(&code);
-                tracing::info!("Deleted empty room {code}");
-            }
         }
     }
 }
@@ -538,52 +488,6 @@ mod tests {
 
         assert!(!room.remove_if_gone_since(sam_id, first));
         assert!(room.remove_if_gone_since(sam_id, second));
-    }
-
-    #[test]
-    fn empty_room_is_abandoned_after_5_minutes() {
-        let mut room = Room::new("KXTP".to_string());
-        let start = Instant::now();
-
-        assert!(!room.is_abandoned(start));
-        assert!(!room.is_abandoned(start + Duration::from_secs(299)));
-        assert!(room.is_abandoned(start + Duration::from_secs(300)));
-    }
-
-    #[test]
-    fn room_with_a_connected_player_is_kept() {
-        let mut room = Room::new("KXTP".to_string());
-        room.add_player("Alex".to_string(), None, test_sender());
-        let start = Instant::now();
-
-        assert!(!room.is_abandoned(start));
-        assert!(!room.is_abandoned(start + Duration::from_secs(600)));
-    }
-
-    #[test]
-    fn only_disconnected_players_count_as_empty() {
-        let mut room = Room::new("KXTP".to_string());
-        let alex = room.add_player("Alex".to_string(), None, test_sender()).id;
-        let start = disconnect(&mut room, alex);
-
-        assert!(!room.is_abandoned(start));
-        assert!(room.is_abandoned(start + Duration::from_secs(300)));
-    }
-
-    #[test]
-    fn someone_connecting_restarts_the_clock() {
-        let mut room = Room::new("KXTP".to_string());
-        let start = Instant::now();
-        assert!(!room.is_abandoned(start));
-
-        room.add_player("Alex".to_string(), None, test_sender());
-        assert!(!room.is_abandoned(start + Duration::from_secs(200)));
-        room.players.clear();
-
-        // Empty again from 200s, so not abandoned until 500s
-        assert!(!room.is_abandoned(start + Duration::from_secs(201)));
-        assert!(!room.is_abandoned(start + Duration::from_secs(400)));
-        assert!(room.is_abandoned(start + Duration::from_secs(501)));
     }
 
     #[test]
