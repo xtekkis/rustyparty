@@ -3,6 +3,7 @@ use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
 mod error;
+mod games;
 mod protocol;
 mod room;
 mod routes;
