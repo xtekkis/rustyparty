@@ -31,9 +31,19 @@ pub fn clean_nickname(nickname: &str) -> Option<String> {
     }
 }
 
+// Where the room is in its cycle: Lobby, Voting, InGame, Results, then back to Lobby
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RoomState {
+    Lobby,
+    Voting,
+    InGame,
+    Results,
+}
+
 // A group of players sharing a room code
 pub struct Room {
     pub code: String,
+    pub state: RoomState,
     pub players: Vec<Player>,
     // Player id of the host, none while the room is empty
     pub host: Option<u32>,
@@ -49,6 +59,7 @@ impl Room {
     pub fn new(code: String) -> Room {
         Room {
             code,
+            state: RoomState::Lobby,
             players: Vec::new(),
             host: None,
             settings: RoomSettings {
@@ -218,6 +229,7 @@ mod tests {
     fn new_room_has_code_and_no_players() {
         let room = Room::new("KXTP".to_string());
         assert_eq!(room.code, "KXTP");
+        assert_eq!(room.state, RoomState::Lobby);
         assert!(room.players.is_empty());
     }
 

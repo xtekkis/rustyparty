@@ -7,7 +7,7 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use super::player::is_known_avatar;
-use super::{Room, clean_nickname, is_valid_points_to_win};
+use super::{Room, RoomState, clean_nickname, is_valid_points_to_win};
 use crate::protocol::ServerMessage;
 
 // How many commands can wait for a room before senders have to wait
@@ -264,6 +264,14 @@ impl Room {
             self.send_error(player_id, "not_host", "Only the host can do that");
             return;
         }
+        if self.state != RoomState::Lobby {
+            self.send_error(
+                player_id,
+                "not_in_lobby",
+                "That can only be changed in the lobby",
+            );
+            return;
+        }
         self.settings.points_to_win = points_to_win;
         self.broadcast(&self.lobby_message());
     }
@@ -424,6 +432,22 @@ mod tests {
             Some(ServerMessage::Error { code, .. }) => code,
             _ => panic!("expected an error"),
         }
+    }
+
+    #[test]
+    fn points_to_win_only_change_in_the_lobby() {
+        let mut room = Room::new("KXTP".to_string());
+        let (connection, mut messages) = mpsc::unbounded_channel();
+        let alex = room.add_player("Alex".to_string(), None, connection).id;
+
+        room.state = RoomState::InGame;
+        room.set_points_to_win(alex, 10);
+        assert_eq!(error_code(messages.try_recv().ok()), "not_in_lobby");
+        assert_eq!(room.settings.points_to_win, 7);
+
+        room.state = RoomState::Lobby;
+        room.set_points_to_win(alex, 10);
+        assert_eq!(room.settings.points_to_win, 10);
     }
 
     #[tokio::test]
