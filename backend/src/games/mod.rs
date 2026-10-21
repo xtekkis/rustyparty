@@ -2,6 +2,8 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use crate::protocol::RoomSettings;
+
 pub type PlayerId = u32;
 pub type TimerId = u32;
 
@@ -82,6 +84,31 @@ pub trait Game: Send {
     fn is_finished(&self) -> bool;
 }
 
+// Facts about a game that don't change. The vote screen is built from these
+pub struct GameInfo {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub description: &'static str,
+    pub min_players: usize,
+    pub max_players: usize,
+    // Makes a fresh game when this one wins the vote
+    pub create: fn(&RoomSettings) -> Box<dyn Game>,
+}
+
+impl GameInfo {
+    // Whether this many players can play it
+    pub fn fits(&self, players: usize) -> bool {
+        (self.min_players..=self.max_players).contains(&players)
+    }
+}
+
+// Every game players can vote for
+pub static GAMES: &[GameInfo] = &[];
+
+pub fn find_game<'a>(games: &'a [GameInfo], id: &str) -> Option<&'a GameInfo> {
+    games.iter().find(|game| game.id == id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -108,5 +135,35 @@ mod tests {
             ]
         );
         assert_eq!(ctx.timers, [(1, Duration::from_secs(60))]);
+    }
+
+    fn test_info(id: &'static str, min_players: usize, max_players: usize) -> GameInfo {
+        GameInfo {
+            id,
+            name: "Test",
+            description: "A game for tests",
+            min_players,
+            max_players,
+            create: |_| unreachable!("not started in these tests"),
+        }
+    }
+
+    #[test]
+    fn game_fits_its_player_limits() {
+        let game = test_info("test", 3, 10);
+        assert!(!game.fits(2));
+        assert!(game.fits(3));
+        assert!(game.fits(10));
+        assert!(!game.fits(11));
+    }
+
+    #[test]
+    fn games_are_found_by_id() {
+        let games = [test_info("first", 3, 10), test_info("second", 2, 8)];
+        assert_eq!(
+            find_game(&games, "second").map(|game| game.id),
+            Some("second")
+        );
+        assert!(find_game(&games, "missing").is_none());
     }
 }
