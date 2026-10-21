@@ -70,6 +70,10 @@ pub enum ServerMessage {
     GameView {
         view: serde_json::Value,
     },
+    // Something a game sent, like a round result
+    GameEvent {
+        event: serde_json::Value,
+    },
     Error {
         code: String,
         message: String,

@@ -8,6 +8,7 @@ use tokio::time::Instant;
 
 use super::player::is_known_avatar;
 use super::{Room, RoomState, clean_nickname, is_valid_points_to_win};
+use crate::games::{Outgoing, Recipient};
 use crate::protocol::ServerMessage;
 
 // How many commands can wait for a room before senders have to wait
@@ -363,10 +364,25 @@ impl Room {
         remind(me, EMPTY_ROOM_LIFETIME, RoomCommand::EmptyTimeout { since });
     }
 
-    fn send_error(&self, player_id: u32, code: &str, message: &str) {
-        if let Some(player) = self.players.iter().find(|player| player.id == player_id) {
-            send(&player.sender, ServerMessage::error(code, message));
+    // Send what a game asked to send, each one wrapped as a game event
+    fn send_game_messages(&self, outgoing: Vec<Outgoing>) {
+        for Outgoing { to, message } in outgoing {
+            let message = ServerMessage::GameEvent { event: message };
+            match to {
+                Recipient::Player(player_id) => self.send_to_player(player_id, message),
+                Recipient::Everyone => self.broadcast(&message),
+            }
         }
+    }
+
+    fn send_to_player(&self, player_id: u32, message: ServerMessage) {
+        if let Some(player) = self.players.iter().find(|player| player.id == player_id) {
+            send(&player.sender, message);
+        }
+    }
+
+    fn send_error(&self, player_id: u32, code: &str, message: &str) {
+        self.send_to_player(player_id, ServerMessage::error(code, message));
     }
 }
 
@@ -389,6 +405,8 @@ fn send(connection: &Connection, message: ServerMessage) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::games::GameCtx;
+    use serde_json::json;
     use tokio::sync::mpsc::UnboundedReceiver;
 
     // Join a player and return their id and the messages their phone gets
@@ -432,6 +450,34 @@ mod tests {
             Some(ServerMessage::Error { code, .. }) => code,
             _ => panic!("expected an error"),
         }
+    }
+
+    #[test]
+    fn game_messages_reach_the_right_players() {
+        let mut room = Room::new("KXTP".to_string());
+        let (alex_connection, mut alex_messages) = mpsc::unbounded_channel();
+        let (sam_connection, mut sam_messages) = mpsc::unbounded_channel();
+        let alex = room
+            .add_player("Alex".to_string(), None, alex_connection)
+            .id;
+        room.add_player("Sam".to_string(), None, sam_connection);
+
+        let mut ctx = GameCtx::default();
+        ctx.send_to(alex, json!({ "hand": [12] }));
+        ctx.broadcast(json!({ "round": 1 }));
+        room.send_game_messages(ctx.outgoing);
+
+        let event = |message| match message {
+            Ok(ServerMessage::GameEvent { event }) => event,
+            _ => panic!("expected a game event"),
+        };
+        assert_eq!(event(alex_messages.try_recv()), json!({ "hand": [12] }));
+        assert_eq!(event(alex_messages.try_recv()), json!({ "round": 1 }));
+        assert_eq!(event(sam_messages.try_recv()), json!({ "round": 1 }));
+        assert!(
+            sam_messages.try_recv().is_err(),
+            "Sam doesn't get Alex's hand"
+        );
     }
 
     #[test]
