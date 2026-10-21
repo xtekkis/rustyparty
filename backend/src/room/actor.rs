@@ -8,7 +8,7 @@ use tokio::time::Instant;
 
 use super::player::is_known_avatar;
 use super::{Room, RoomState, clean_nickname, is_valid_points_to_win};
-use crate::games::{Outgoing, Recipient};
+use crate::games::{GameCtx, Outgoing, Recipient, TimerId};
 use crate::protocol::ServerMessage;
 
 // How many commands can wait for a room before senders have to wait
@@ -65,6 +65,11 @@ pub enum RoomCommand {
     GraceOver {
         player_id: u32,
         since: Instant,
+    },
+    // Sent by the room to itself when a timer a game asked for runs out
+    GameTimer {
+        game_number: u32,
+        timer: TimerId,
     },
     PlayerCount {
         reply: oneshot::Sender<usize>,
@@ -168,6 +173,15 @@ impl Room {
             RoomCommand::PlayerCount { reply } => {
                 let _ = reply.send(self.players.len());
             }
+            RoomCommand::GameTimer { game_number, timer } => {
+                if let RoomState::InGame { game, number } = &mut self.state
+                    && *number == game_number
+                {
+                    let mut ctx = GameCtx::default();
+                    game.handle_timer(timer, &mut ctx);
+                    self.run_game_ctx(ctx, game_number, me);
+                }
+            }
             // Handled in run_room
             RoomCommand::EmptyTimeout { .. } => {}
         }
@@ -265,7 +279,7 @@ impl Room {
             self.send_error(player_id, "not_host", "Only the host can do that");
             return;
         }
-        if self.state != RoomState::Lobby {
+        if !matches!(self.state, RoomState::Lobby) {
             self.send_error(
                 player_id,
                 "not_in_lobby",
@@ -364,6 +378,14 @@ impl Room {
         remind(me, EMPTY_ROOM_LIFETIME, RoomCommand::EmptyTimeout { since });
     }
 
+    // Carry out what a game asked for: send its messages and start its timers
+    fn run_game_ctx(&self, ctx: GameCtx, game_number: u32, me: &WeakSender<RoomCommand>) {
+        self.send_game_messages(ctx.outgoing);
+        for (timer, after) in ctx.timers {
+            remind(me, after, RoomCommand::GameTimer { game_number, timer });
+        }
+    }
+
     // Send what a game asked to send, each one wrapped as a game event
     fn send_game_messages(&self, outgoing: Vec<Outgoing>) {
         for Outgoing { to, message } in outgoing {
@@ -405,8 +427,8 @@ fn send(connection: &Connection, message: ServerMessage) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::games::GameCtx;
-    use serde_json::json;
+    use crate::games::{Game, GameError, PlayerId};
+    use serde_json::{Value, json};
     use tokio::sync::mpsc::UnboundedReceiver;
 
     // Join a player and return their id and the messages their phone gets
@@ -452,6 +474,94 @@ mod tests {
         }
     }
 
+    // A game that only answers timers, saying which one ran out
+    struct TimerEcho;
+
+    impl Game for TimerEcho {
+        fn start(&mut self, _players: &[PlayerId], _ctx: &mut GameCtx) {}
+
+        fn handle_action(
+            &mut self,
+            _player: PlayerId,
+            _action: Value,
+            _ctx: &mut GameCtx,
+        ) -> Result<(), GameError> {
+            Ok(())
+        }
+
+        fn handle_timer(&mut self, timer: TimerId, ctx: &mut GameCtx) {
+            ctx.broadcast(json!({ "timer": timer }));
+        }
+
+        fn player_joined(&mut self, _player: PlayerId, _ctx: &mut GameCtx) {}
+
+        fn player_left(&mut self, _player: PlayerId, _ctx: &mut GameCtx) {}
+
+        fn view_for(&self, _player: PlayerId) -> Value {
+            Value::Null
+        }
+
+        fn is_finished(&self) -> bool {
+            false
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn game_timer_fires_after_its_delay() {
+        let room = Room::new("KXTP".to_string());
+        let (commands, mut receiver) = mpsc::channel(8);
+
+        let mut ctx = GameCtx::default();
+        ctx.start_timer(7, Duration::from_secs(60));
+        room.run_game_ctx(ctx, 1, &commands.downgrade());
+
+        tokio::time::sleep(Duration::from_secs(59)).await;
+        assert!(receiver.try_recv().is_err(), "not yet");
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(RoomCommand::GameTimer {
+                game_number: 1,
+                timer: 7
+            })
+        ));
+    }
+
+    #[test]
+    fn game_timer_only_reaches_the_game_that_asked() {
+        let mut room = Room::new("KXTP".to_string());
+        let (connection, mut messages) = mpsc::unbounded_channel();
+        room.add_player("Alex".to_string(), None, connection);
+        room.state = RoomState::InGame {
+            game: Box::new(TimerEcho),
+            number: 2,
+        };
+        let (commands, _receiver) = mpsc::channel(8);
+        let me = commands.downgrade();
+
+        // A timer from an earlier game is ignored
+        room.handle(
+            RoomCommand::GameTimer {
+                game_number: 1,
+                timer: 7,
+            },
+            &me,
+        );
+        assert!(messages.try_recv().is_err());
+
+        room.handle(
+            RoomCommand::GameTimer {
+                game_number: 2,
+                timer: 7,
+            },
+            &me,
+        );
+        assert!(matches!(
+            messages.try_recv(),
+            Ok(ServerMessage::GameEvent { event }) if event == json!({ "timer": 7 })
+        ));
+    }
+
     #[test]
     fn game_messages_reach_the_right_players() {
         let mut room = Room::new("KXTP".to_string());
@@ -486,7 +596,7 @@ mod tests {
         let (connection, mut messages) = mpsc::unbounded_channel();
         let alex = room.add_player("Alex".to_string(), None, connection).id;
 
-        room.state = RoomState::InGame;
+        room.state = RoomState::Voting;
         room.set_points_to_win(alex, 10);
         assert_eq!(error_code(messages.try_recv().ok()), "not_in_lobby");
         assert_eq!(room.settings.points_to_win, 7);

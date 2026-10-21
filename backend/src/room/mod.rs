@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::time::Instant;
 
+use crate::games::Game;
 use crate::protocol::{LobbyPlayer, RoomSettings, ServerMessage};
 use player::{Player, generate_token};
 
@@ -32,11 +33,14 @@ pub fn clean_nickname(nickname: &str) -> Option<String> {
 }
 
 // Where the room is in its cycle: Lobby, Voting, InGame, Results, then back to Lobby
-#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RoomState {
     Lobby,
     Voting,
-    InGame,
+    InGame {
+        game: Box<dyn Game>,
+        // Counts up with every game, so a timer from an old game can't reach a new one
+        number: u32,
+    },
     Results,
 }
 
@@ -229,7 +233,7 @@ mod tests {
     fn new_room_has_code_and_no_players() {
         let room = Room::new("KXTP".to_string());
         assert_eq!(room.code, "KXTP");
-        assert_eq!(room.state, RoomState::Lobby);
+        assert!(matches!(room.state, RoomState::Lobby));
         assert!(room.players.is_empty());
     }
 
