@@ -427,8 +427,8 @@ fn send(connection: &Connection, message: ServerMessage) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::games::{Game, GameError, PlayerId};
-    use serde_json::{Value, json};
+    use crate::games::dummy::DummyGame;
+    use serde_json::json;
     use tokio::sync::mpsc::UnboundedReceiver;
 
     // Join a player and return their id and the messages their phone gets
@@ -474,38 +474,6 @@ mod tests {
         }
     }
 
-    // A game that only answers timers, saying which one ran out
-    struct TimerEcho;
-
-    impl Game for TimerEcho {
-        fn start(&mut self, _players: &[PlayerId], _ctx: &mut GameCtx) {}
-
-        fn handle_action(
-            &mut self,
-            _player: PlayerId,
-            _action: Value,
-            _ctx: &mut GameCtx,
-        ) -> Result<(), GameError> {
-            Ok(())
-        }
-
-        fn handle_timer(&mut self, timer: TimerId, ctx: &mut GameCtx) {
-            ctx.broadcast(json!({ "timer": timer }));
-        }
-
-        fn player_joined(&mut self, _player: PlayerId, _ctx: &mut GameCtx) {}
-
-        fn player_left(&mut self, _player: PlayerId, _ctx: &mut GameCtx) {}
-
-        fn view_for(&self, _player: PlayerId) -> Value {
-            Value::Null
-        }
-
-        fn is_finished(&self) -> bool {
-            false
-        }
-    }
-
     #[tokio::test(start_paused = true)]
     async fn game_timer_fires_after_its_delay() {
         let room = Room::new("KXTP".to_string());
@@ -533,7 +501,7 @@ mod tests {
         let (connection, mut messages) = mpsc::unbounded_channel();
         room.add_player("Alex".to_string(), None, connection);
         room.state = RoomState::InGame {
-            game: Box::new(TimerEcho),
+            game: Box::new(DummyGame::default()),
             number: 2,
         };
         let (commands, _receiver) = mpsc::channel(8);
@@ -543,7 +511,7 @@ mod tests {
         room.handle(
             RoomCommand::GameTimer {
                 game_number: 1,
-                timer: 7,
+                timer: 1,
             },
             &me,
         );
@@ -552,13 +520,13 @@ mod tests {
         room.handle(
             RoomCommand::GameTimer {
                 game_number: 2,
-                timer: 7,
+                timer: 1,
             },
             &me,
         );
         assert!(matches!(
             messages.try_recv(),
-            Ok(ServerMessage::GameEvent { event }) if event == json!({ "timer": 7 })
+            Ok(ServerMessage::GameEvent { event }) if event == json!({ "event": "time_up" })
         ));
     }
 

@@ -1,3 +1,6 @@
+#[cfg(test)]
+pub mod dummy;
+
 use std::time::Duration;
 
 use serde_json::Value;
