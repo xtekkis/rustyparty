@@ -7,8 +7,8 @@ use std::collections::HashSet;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::time::Instant;
 
-use crate::games::Game;
-use crate::protocol::{LobbyPlayer, RoomSettings, ServerMessage};
+use crate::games::{GAMES, Game, GameInfo};
+use crate::protocol::{LobbyPlayer, RoomSettings, ServerMessage, VoteOption};
 use player::{Player, generate_token};
 
 const NICKNAME_MAX_LENGTH: usize = 16;
@@ -52,6 +52,8 @@ pub struct Room {
     // Player id of the host, none while the room is empty
     pub host: Option<u32>,
     pub settings: RoomSettings,
+    // Games this room can vote for
+    pub games: &'static [GameInfo],
     // Tokens of banned players, they can't join this room again
     banned_tokens: HashSet<String>,
     // When the room last had nobody connected, none while someone is
@@ -66,6 +68,7 @@ impl Room {
             state: RoomState::Lobby,
             players: Vec::new(),
             host: None,
+            games: GAMES,
             settings: RoomSettings {
                 points_to_win: POINTS_TO_WIN_DEFAULT,
             },
@@ -187,6 +190,22 @@ impl Room {
         let token = player.token.clone();
         self.remove_player(player_id);
         Some(token)
+    }
+
+    // The games on offer, as everyone sees them
+    pub fn vote_message(&self) -> ServerMessage {
+        let options = self
+            .games
+            .iter()
+            .map(|game| VoteOption {
+                id: game.id,
+                name: game.name,
+                description: game.description,
+                min_players: game.min_players,
+                max_players: game.max_players,
+            })
+            .collect();
+        ServerMessage::VoteState { options }
     }
 
     // The lobby as everyone sees it

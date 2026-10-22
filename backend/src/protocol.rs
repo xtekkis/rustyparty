@@ -44,6 +44,16 @@ pub struct LobbyPlayer {
     pub connected: bool,
 }
 
+// A game players can vote for
+#[derive(Debug, Clone, Serialize)]
+pub struct VoteOption {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub description: &'static str,
+    pub min_players: usize,
+    pub max_players: usize,
+}
+
 // Room settings the host can change
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct RoomSettings {
@@ -62,6 +72,9 @@ pub enum ServerMessage {
         players: Vec<LobbyPlayer>,
         host: Option<u32>,
         settings: RoomSettings,
+    },
+    VoteState {
+        options: Vec<VoteOption>,
     },
     VoteResult {
         game: String,

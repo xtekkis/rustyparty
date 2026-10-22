@@ -17,6 +17,9 @@ const COMMAND_QUEUE_SIZE: usize = 64;
 // How long a disconnected player keeps their seat
 const DISCONNECT_GRACE: Duration = Duration::from_secs(90);
 
+// The game vote needs at least this many players
+const MIN_PLAYERS_TO_VOTE: usize = 3;
+
 // A room with nobody connected for this long deletes itself
 const EMPTY_ROOM_LIFETIME: Duration = Duration::from_secs(5 * 60);
 
@@ -128,6 +131,7 @@ async fn run_room(
         }
 
         room.handle(command, &me);
+        room.start_vote_if_ready();
         room.watch_if_empty(&me);
     }
 }
@@ -259,6 +263,14 @@ impl Room {
     }
 
     fn set_ready(&mut self, player_id: u32, ready: bool) {
+        if !matches!(self.state, RoomState::Lobby) {
+            self.send_error(
+                player_id,
+                "not_in_lobby",
+                "That can only be changed in the lobby",
+            );
+            return;
+        }
         if let Some(player) = self.player_mut(player_id) {
             player.ready = ready;
             tracing::debug!("Player {player_id} ready: {ready}");
@@ -358,6 +370,26 @@ impl Room {
         );
     }
 
+    // Everyone connected is ready and there are enough of them: start the game vote
+    fn start_vote_if_ready(&mut self) {
+        if !matches!(self.state, RoomState::Lobby) {
+            return;
+        }
+        // Players in their grace period don't hold up the others
+        let connected: Vec<_> = self
+            .players
+            .iter()
+            .filter(|player| player.disconnected_since.is_none())
+            .collect();
+        if connected.len() < MIN_PLAYERS_TO_VOTE || !connected.iter().all(|player| player.ready) {
+            return;
+        }
+
+        self.state = RoomState::Voting;
+        tracing::info!("Voting started in room {}", self.code);
+        self.broadcast(&self.vote_message());
+    }
+
     // Start the countdown when the last connected player is gone, stop it when someone is back
     fn watch_if_empty(&mut self, me: &WeakSender<RoomCommand>) {
         let anyone_connected = self
@@ -427,7 +459,7 @@ fn send(connection: &Connection, message: ServerMessage) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::games::dummy::DummyGame;
+    use crate::games::dummy::{DUMMY_INFO, DummyGame};
     use serde_json::json;
     use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -528,6 +560,98 @@ mod tests {
             messages.try_recv(),
             Ok(ServerMessage::GameEvent { event }) if event == json!({ "event": "time_up" })
         ));
+    }
+
+    // A room with these players in it, and their phones' messages
+    fn room_with(nicknames: &[&str]) -> (Room, Vec<UnboundedReceiver<ServerMessage>>) {
+        let mut room = Room::new("KXTP".to_string());
+        room.games = std::slice::from_ref(&DUMMY_INFO);
+        let mut phones = Vec::new();
+        for nickname in nicknames {
+            let (connection, messages) = mpsc::unbounded_channel();
+            room.add_player(nickname.to_string(), None, connection);
+            phones.push(messages);
+        }
+        (room, phones)
+    }
+
+    fn got_vote_state(messages: &mut UnboundedReceiver<ServerMessage>) -> bool {
+        // Skip lobby updates
+        while let Ok(message) = messages.try_recv() {
+            if matches!(message, ServerMessage::VoteState { .. }) {
+                return true;
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn vote_starts_when_everyone_is_ready() {
+        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
+        room.set_ready(1, true);
+        room.set_ready(2, true);
+        room.start_vote_if_ready();
+        assert!(
+            matches!(room.state, RoomState::Lobby),
+            "Kim isn't ready yet"
+        );
+
+        room.set_ready(3, true);
+        room.start_vote_if_ready();
+        assert!(matches!(room.state, RoomState::Voting));
+        for phone in &mut phones {
+            assert!(got_vote_state(phone));
+        }
+    }
+
+    #[test]
+    fn two_players_are_not_enough() {
+        let (mut room, _phones) = room_with(&["Alex", "Sam"]);
+        room.set_ready(1, true);
+        room.set_ready(2, true);
+        room.start_vote_if_ready();
+        assert!(matches!(room.state, RoomState::Lobby));
+    }
+
+    #[test]
+    fn disconnected_player_does_not_hold_up_the_vote() {
+        let (mut room, _phones) = room_with(&["Alex", "Sam", "Kim", "Lee"]);
+        room.player_mut(4)
+            .expect("Lee is in the room")
+            .disconnected_since = Some(Instant::now());
+        for player_id in 1..=3 {
+            room.set_ready(player_id, true);
+        }
+        room.start_vote_if_ready();
+        assert!(matches!(room.state, RoomState::Voting));
+    }
+
+    #[test]
+    fn ready_only_changes_in_the_lobby() {
+        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
+        room.state = RoomState::Voting;
+        room.set_ready(1, true);
+        assert_eq!(error_code(phones[0].try_recv().ok()), "not_in_lobby");
+    }
+
+    #[tokio::test]
+    async fn ready_players_get_the_vote_through_the_room_task() {
+        let (room, _rooms) = spawn_room();
+        let mut phones = Vec::new();
+        for nickname in ["Alex", "Sam", "Kim"] {
+            let (player_id, messages) = join(&room, nickname, None).await;
+            phones.push(messages);
+            room.send(RoomCommand::Ready {
+                player_id: player_id.unwrap(),
+                ready: true,
+            })
+            .await;
+        }
+        // Ask something so every command above has been handled
+        player_count(&room).await;
+        for phone in &mut phones {
+            assert!(got_vote_state(phone));
+        }
     }
 
     #[test]
