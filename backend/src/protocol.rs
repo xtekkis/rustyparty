@@ -52,6 +52,8 @@ pub struct VoteOption {
     pub description: &'static str,
     pub min_players: usize,
     pub max_players: usize,
+    // False when the room has too few or too many players for it
+    pub available: bool,
 }
 
 // Room settings the host can change

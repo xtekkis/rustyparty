@@ -194,6 +194,8 @@ impl Room {
 
     // The games on offer, as everyone sees them
     pub fn vote_message(&self) -> ServerMessage {
+        // Everyone with a seat counts, players in their grace period will be in the game too
+        let player_count = self.players.len();
         let options = self
             .games
             .iter()
@@ -203,6 +205,7 @@ impl Room {
                 description: game.description,
                 min_players: game.min_players,
                 max_players: game.max_players,
+                available: game.fits(player_count),
             })
             .collect();
         ServerMessage::VoteState { options }
@@ -523,6 +526,42 @@ mod tests {
 
         assert!(!room.remove_if_gone_since(sam_id, first));
         assert!(room.remove_if_gone_since(sam_id, second));
+    }
+
+    #[test]
+    fn vote_marks_games_that_dont_fit() {
+        static TEST_GAMES: [GameInfo; 2] = [
+            GameInfo {
+                id: "small",
+                name: "Small",
+                description: "For 3 to 4 players",
+                min_players: 3,
+                max_players: 4,
+                create: crate::games::dummy::create,
+            },
+            GameInfo {
+                id: "big",
+                name: "Big",
+                description: "For 5 to 8 players",
+                min_players: 5,
+                max_players: 8,
+                create: crate::games::dummy::create,
+            },
+        ];
+        let mut room = Room::new("KXTP".to_string());
+        room.games = &TEST_GAMES;
+        for nickname in ["Alex", "Sam", "Kim"] {
+            room.add_player(nickname.to_string(), None, test_sender());
+        }
+
+        let ServerMessage::VoteState { options } = room.vote_message() else {
+            panic!("expected a vote message");
+        };
+        let available: Vec<(&str, bool)> = options
+            .iter()
+            .map(|option| (option.id, option.available))
+            .collect();
+        assert_eq!(available, [("small", true), ("big", false)]);
     }
 
     #[test]

@@ -21,7 +21,7 @@ pub static DUMMY_INFO: GameInfo = GameInfo {
     create,
 };
 
-fn create(_settings: &RoomSettings) -> Box<dyn Game> {
+pub fn create(_settings: &RoomSettings) -> Box<dyn Game> {
     Box::new(DummyGame::default())
 }
 
