@@ -115,6 +115,7 @@ async fn handle_text(
             let command = match message {
                 ClientMessage::SetAvatar { avatar } => RoomCommand::SetAvatar { player_id, avatar },
                 ClientMessage::Ready { ready } => RoomCommand::Ready { player_id, ready },
+                ClientMessage::Vote { game } => RoomCommand::Vote { player_id, game },
                 ClientMessage::RoomSettings { points_to_win } => RoomCommand::SetPointsToWin {
                     player_id,
                     points_to_win,

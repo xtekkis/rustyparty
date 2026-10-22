@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 // Messages from a player's phone to the server
@@ -77,6 +79,8 @@ pub enum ServerMessage {
     },
     VoteState {
         options: Vec<VoteOption>,
+        // Game id to the ids of the players who voted for it
+        votes: BTreeMap<&'static str, Vec<u32>>,
     },
     VoteResult {
         game: String,

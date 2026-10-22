@@ -8,7 +8,7 @@ use tokio::time::Instant;
 
 use super::player::is_known_avatar;
 use super::{Room, RoomState, clean_nickname, is_valid_points_to_win};
-use crate::games::{GameCtx, Outgoing, Recipient, TimerId};
+use crate::games::{GameCtx, Outgoing, Recipient, TimerId, find_game};
 use crate::protocol::ServerMessage;
 
 // How many commands can wait for a room before senders have to wait
@@ -46,6 +46,10 @@ pub enum RoomCommand {
     Ready {
         player_id: u32,
         ready: bool,
+    },
+    Vote {
+        player_id: u32,
+        game: String,
     },
     SetPointsToWin {
         player_id: u32,
@@ -151,6 +155,7 @@ impl Room {
             }
             RoomCommand::SetAvatar { player_id, avatar } => self.set_avatar(player_id, avatar),
             RoomCommand::Ready { player_id, ready } => self.set_ready(player_id, ready),
+            RoomCommand::Vote { player_id, game } => self.vote(player_id, &game),
             RoomCommand::SetPointsToWin {
                 player_id,
                 points_to_win,
@@ -171,7 +176,7 @@ impl Room {
                         "Player {player_id} didn't come back and was removed from room {}",
                         self.code
                     );
-                    self.broadcast(&self.lobby_message());
+                    self.broadcast_players();
                 }
             }
             RoomCommand::PlayerCount { reply } => {
@@ -217,7 +222,7 @@ impl Room {
                         token,
                     },
                 );
-                self.broadcast(&self.lobby_message());
+                self.broadcast_players();
                 return Some(id);
             }
         }
@@ -247,7 +252,7 @@ impl Room {
                 token,
             },
         );
-        self.broadcast(&self.lobby_message());
+        self.broadcast_players();
         Some(id)
     }
 
@@ -276,6 +281,30 @@ impl Room {
             tracing::debug!("Player {player_id} ready: {ready}");
             self.broadcast(&self.lobby_message());
         }
+    }
+
+    fn vote(&mut self, player_id: u32, game_id: &str) {
+        if !matches!(self.state, RoomState::Voting { .. }) {
+            self.send_error(player_id, "not_voting", "Voting isn't open");
+            return;
+        }
+        let Some(game) = find_game(self.games, game_id) else {
+            self.send_error(player_id, "unknown_game", "That game doesn't exist");
+            return;
+        };
+        if !game.fits(self.players.len()) {
+            self.send_error(
+                player_id,
+                "game_not_available",
+                "That game doesn't fit the number of players",
+            );
+            return;
+        }
+
+        if let RoomState::Voting { votes } = &mut self.state {
+            votes.insert(player_id, game.id);
+        }
+        self.broadcast(&self.vote_message());
     }
 
     fn set_points_to_win(&mut self, player_id: u32, points_to_win: u8) {
@@ -334,13 +363,13 @@ impl Room {
 
         let action = if ban { "banned" } else { "kicked" };
         tracing::info!("Player {target_id} was {action} from room {}", self.code);
-        self.broadcast(&self.lobby_message());
+        self.broadcast_players();
     }
 
     fn leave(&mut self, player_id: u32) {
         if self.remove_player(player_id) {
             tracing::info!("Player {player_id} left room {}", self.code);
-            self.broadcast(&self.lobby_message());
+            self.broadcast_players();
         }
     }
 
@@ -385,7 +414,9 @@ impl Room {
             return;
         }
 
-        self.state = RoomState::Voting;
+        self.state = RoomState::Voting {
+            votes: HashMap::new(),
+        };
         tracing::info!("Voting started in room {}", self.code);
         self.broadcast(&self.vote_message());
     }
@@ -461,6 +492,7 @@ mod tests {
     use super::*;
     use crate::games::dummy::{DUMMY_INFO, DummyGame};
     use serde_json::json;
+    use std::collections::BTreeMap;
     use tokio::sync::mpsc::UnboundedReceiver;
 
     // Join a player and return their id and the messages their phone gets
@@ -598,7 +630,7 @@ mod tests {
 
         room.set_ready(3, true);
         room.start_vote_if_ready();
-        assert!(matches!(room.state, RoomState::Voting));
+        assert!(matches!(room.state, RoomState::Voting { .. }));
         for phone in &mut phones {
             assert!(got_vote_state(phone));
         }
@@ -623,13 +655,84 @@ mod tests {
             room.set_ready(player_id, true);
         }
         room.start_vote_if_ready();
-        assert!(matches!(room.state, RoomState::Voting));
+        assert!(matches!(room.state, RoomState::Voting { .. }));
+    }
+
+    // The votes in the newest vote_state this phone got
+    fn latest_votes(
+        messages: &mut UnboundedReceiver<ServerMessage>,
+    ) -> Option<BTreeMap<&'static str, Vec<u32>>> {
+        let mut latest = None;
+        while let Ok(message) = messages.try_recv() {
+            if let ServerMessage::VoteState { votes, .. } = message {
+                latest = Some(votes);
+            }
+        }
+        latest
+    }
+
+    fn voting_room(nicknames: &[&str]) -> (Room, Vec<UnboundedReceiver<ServerMessage>>) {
+        let (mut room, phones) = room_with(nicknames);
+        room.state = RoomState::Voting {
+            votes: HashMap::new(),
+        };
+        (room, phones)
+    }
+
+    #[test]
+    fn votes_are_shown_to_everyone() {
+        let (mut room, mut phones) = voting_room(&["Alex", "Sam", "Kim"]);
+        room.vote(3, "dummy");
+        room.vote(1, "dummy");
+
+        for phone in &mut phones {
+            let votes = latest_votes(phone).expect("a vote_state");
+            assert_eq!(votes, BTreeMap::from([("dummy", vec![1, 3])]));
+        }
+    }
+
+    #[test]
+    fn wrong_votes_are_refused() {
+        let (mut room, mut phones) = voting_room(&["Alex", "Sam"]);
+        room.vote(1, "chess");
+        assert_eq!(error_code(phones[0].try_recv().ok()), "unknown_game");
+        // The dummy game needs 3 players
+        room.vote(1, "dummy");
+        assert_eq!(error_code(phones[0].try_recv().ok()), "game_not_available");
+
+        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
+        room.vote(1, "dummy");
+        assert_eq!(error_code(phones[0].try_recv().ok()), "not_voting");
+    }
+
+    #[test]
+    fn leaving_takes_back_the_vote() {
+        let (mut room, mut phones) = voting_room(&["Alex", "Sam", "Kim", "Lee"]);
+        room.vote(4, "dummy");
+        room.leave(4);
+
+        let votes = latest_votes(&mut phones[0]).expect("a vote_state");
+        assert!(votes.is_empty());
+    }
+
+    #[test]
+    fn joining_during_the_vote_shows_the_vote() {
+        let (mut room, _phones) = voting_room(&["Alex", "Sam", "Kim"]);
+        room.vote(1, "dummy");
+
+        let (connection, mut messages) = mpsc::unbounded_channel();
+        let lee = room.join("Lee".to_string(), None, None, connection);
+        assert!(lee.is_some());
+        let votes = latest_votes(&mut messages).expect("Lee gets the vote");
+        assert_eq!(votes, BTreeMap::from([("dummy", vec![1])]));
     }
 
     #[test]
     fn ready_only_changes_in_the_lobby() {
         let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
-        room.state = RoomState::Voting;
+        room.state = RoomState::Voting {
+            votes: HashMap::new(),
+        };
         room.set_ready(1, true);
         assert_eq!(error_code(phones[0].try_recv().ok()), "not_in_lobby");
     }
@@ -688,7 +791,9 @@ mod tests {
         let (connection, mut messages) = mpsc::unbounded_channel();
         let alex = room.add_player("Alex".to_string(), None, connection).id;
 
-        room.state = RoomState::Voting;
+        room.state = RoomState::Voting {
+            votes: HashMap::new(),
+        };
         room.set_points_to_win(alex, 10);
         assert_eq!(error_code(messages.try_recv().ok()), "not_in_lobby");
         assert_eq!(room.settings.points_to_win, 7);

@@ -2,7 +2,7 @@ pub mod actor;
 pub mod code;
 pub mod player;
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::time::Instant;
@@ -35,7 +35,10 @@ pub fn clean_nickname(nickname: &str) -> Option<String> {
 // Where the room is in its cycle: Lobby, Voting, InGame, Results, then back to Lobby
 pub enum RoomState {
     Lobby,
-    Voting,
+    Voting {
+        // Player id to the id of the game they picked
+        votes: HashMap<u32, &'static str>,
+    },
     InGame {
         game: Box<dyn Game>,
         // Counts up with every game, so a timer from an old game can't reach a new one
@@ -125,6 +128,11 @@ impl Room {
         let count_before = self.players.len();
         self.players.retain(|player| player.id != player_id);
 
+        // Someone who left doesn't get a say
+        if let RoomState::Voting { votes } = &mut self.state {
+            votes.remove(&player_id);
+        }
+
         // Players are kept in join order, so the first one left joined earliest
         if self.host == Some(player_id) {
             self.host = self.players.first().map(|player| player.id);
@@ -208,7 +216,27 @@ impl Room {
                 available: game.fits(player_count),
             })
             .collect();
-        ServerMessage::VoteState { options }
+
+        let mut votes: BTreeMap<&'static str, Vec<u32>> = BTreeMap::new();
+        if let RoomState::Voting { votes: picks } = &self.state {
+            for (&player_id, &game_id) in picks {
+                votes.entry(game_id).or_default().push(player_id);
+            }
+        }
+        // Same order every time, so the phones don't reshuffle the bubbles
+        for voters in votes.values_mut() {
+            voters.sort();
+        }
+
+        ServerMessage::VoteState { options, votes }
+    }
+
+    // Tell everyone who's in the room, and the vote too while one is running
+    pub fn broadcast_players(&self) {
+        self.broadcast(&self.lobby_message());
+        if matches!(self.state, RoomState::Voting { .. }) {
+            self.broadcast(&self.vote_message());
+        }
     }
 
     // The lobby as everyone sees it
@@ -554,7 +582,7 @@ mod tests {
             room.add_player(nickname.to_string(), None, test_sender());
         }
 
-        let ServerMessage::VoteState { options } = room.vote_message() else {
+        let ServerMessage::VoteState { options, .. } = room.vote_message() else {
             panic!("expected a vote message");
         };
         let available: Vec<(&str, bool)> = options
