@@ -63,6 +63,8 @@ pub struct Room {
     // When the room last had nobody connected, none while someone is
     empty_since: Option<Instant>,
     next_player_id: u32,
+    // How many games this room has started, used to number them
+    games_started: u32,
 }
 
 impl Room {
@@ -79,6 +81,7 @@ impl Room {
             banned_tokens: HashSet::new(),
             empty_since: None,
             next_player_id: 1,
+            games_started: 0,
         }
     }
 

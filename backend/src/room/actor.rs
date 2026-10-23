@@ -8,7 +8,7 @@ use tokio::time::Instant;
 
 use super::player::is_known_avatar;
 use super::{Room, RoomState, clean_nickname, is_valid_points_to_win};
-use crate::games::{GameCtx, Outgoing, Recipient, TimerId, find_game};
+use crate::games::{GameCtx, GameInfo, Outgoing, Recipient, TimerId, find_game};
 use crate::protocol::ServerMessage;
 
 // How many commands can wait for a room before senders have to wait
@@ -399,6 +399,21 @@ impl Room {
         );
     }
 
+    // Start a fresh game with everyone who has a seat
+    fn start_game(&mut self, info: &GameInfo, me: &WeakSender<RoomCommand>) {
+        self.games_started += 1;
+        let number = self.games_started;
+
+        let mut game = (info.create)(&self.settings);
+        let players: Vec<u32> = self.players.iter().map(|player| player.id).collect();
+        let mut ctx = GameCtx::default();
+        game.start(&players, &mut ctx);
+
+        self.state = RoomState::InGame { game, number };
+        tracing::info!("Game {} started in room {}", info.id, self.code);
+        self.run_game_ctx(ctx, number, me);
+    }
+
     // Everyone connected is ready and there are enough of them: start the game vote
     fn start_vote_if_ready(&mut self) {
         if !matches!(self.state, RoomState::Lobby) {
@@ -537,6 +552,43 @@ mod tests {
             Some(ServerMessage::Error { code, .. }) => code,
             _ => panic!("expected an error"),
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn starting_a_game_runs_its_start() {
+        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
+        let (commands, mut receiver) = mpsc::channel(8);
+        room.start_game(&DUMMY_INFO, &commands.downgrade());
+
+        assert!(matches!(room.state, RoomState::InGame { number: 1, .. }));
+        for phone in &mut phones {
+            let mut got_started = false;
+            while let Ok(message) = phone.try_recv() {
+                if let ServerMessage::GameEvent { event } = message {
+                    got_started = event == json!({ "event": "started" });
+                }
+            }
+            assert!(got_started, "every player hears the game start");
+        }
+
+        // The dummy game's 30 second time limit was scheduled for game 1
+        tokio::time::sleep(Duration::from_secs(31)).await;
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(RoomCommand::GameTimer {
+                game_number: 1,
+                timer: 1
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn each_game_gets_a_new_number() {
+        let (mut room, _phones) = room_with(&["Alex", "Sam", "Kim"]);
+        let (commands, _receiver) = mpsc::channel(8);
+        room.start_game(&DUMMY_INFO, &commands.downgrade());
+        room.start_game(&DUMMY_INFO, &commands.downgrade());
+        assert!(matches!(room.state, RoomState::InGame { number: 2, .. }));
     }
 
     #[tokio::test(start_paused = true)]
