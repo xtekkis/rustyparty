@@ -490,6 +490,7 @@ fn send(connection: &Connection, message: ServerMessage) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::games::GameInfo;
     use crate::games::dummy::{DUMMY_INFO, DummyGame};
     use serde_json::json;
     use std::collections::BTreeMap;
@@ -725,6 +726,52 @@ mod tests {
         assert!(lee.is_some());
         let votes = latest_votes(&mut messages).expect("Lee gets the vote");
         assert_eq!(votes, BTreeMap::from([("dummy", vec![1])]));
+    }
+
+    // Two games that both fit 3 to 10 players
+    static TWO_GAMES: [GameInfo; 2] = [
+        GameInfo {
+            id: "first",
+            name: "First",
+            description: "A game for tests",
+            min_players: 3,
+            max_players: 10,
+            create: crate::games::dummy::create,
+        },
+        GameInfo {
+            id: "second",
+            name: "Second",
+            description: "Another game for tests",
+            min_players: 3,
+            max_players: 10,
+            create: crate::games::dummy::create,
+        },
+    ];
+
+    #[test]
+    fn changing_a_vote_moves_it() {
+        let (mut room, mut phones) = voting_room(&["Alex", "Sam", "Kim"]);
+        room.games = &TWO_GAMES;
+        room.vote(1, "first");
+        room.vote(2, "first");
+        room.vote(1, "second");
+
+        let votes = latest_votes(&mut phones[2]).expect("a vote_state");
+        assert_eq!(
+            votes,
+            BTreeMap::from([("first", vec![2]), ("second", vec![1])])
+        );
+    }
+
+    #[test]
+    fn votes_are_refused_once_voting_ends() {
+        let (mut room, mut phones) = voting_room(&["Alex", "Sam", "Kim"]);
+        room.vote(1, "dummy");
+        latest_votes(&mut phones[0]);
+
+        room.state = RoomState::Lobby;
+        room.vote(1, "dummy");
+        assert_eq!(error_code(phones[0].try_recv().ok()), "not_voting");
     }
 
     #[test]
