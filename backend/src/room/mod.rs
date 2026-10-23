@@ -1,6 +1,7 @@
 pub mod actor;
 pub mod code;
 pub mod player;
+pub mod vote;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
