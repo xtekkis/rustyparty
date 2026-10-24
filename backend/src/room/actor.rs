@@ -551,6 +551,18 @@ impl Room {
         for (timer, after) in ctx.timers {
             remind(me, after, RoomCommand::GameTimer { game_number, timer });
         }
+        self.send_game_views();
+    }
+
+    // Every player gets the game as they are allowed to see it, never someone else's
+    fn send_game_views(&self) {
+        let RoomState::InGame { game, .. } = &self.state else {
+            return;
+        };
+        for player in &self.players {
+            let view = game.view_for(player.id);
+            send(&player.sender, ServerMessage::GameView { view });
+        }
     }
 
     // Send what a game asked to send, each one wrapped as a game event
@@ -652,6 +664,54 @@ mod tests {
             }
         }
         last
+    }
+
+    // The last game view this phone got
+    fn last_game_view(messages: &mut UnboundedReceiver<ServerMessage>) -> Option<Value> {
+        let mut last = None;
+        while let Ok(message) = messages.try_recv() {
+            if let ServerMessage::GameView { view } = message {
+                last = Some(view);
+            }
+        }
+        last
+    }
+
+    #[tokio::test]
+    async fn everyone_gets_their_own_view_after_each_game_event() {
+        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
+        let (_commands, me) = test_me();
+
+        room.start_game(&DUMMY_INFO, &me);
+        for phone in &mut phones {
+            assert_eq!(last_game_view(phone), Some(json!({ "presses": 0 })));
+        }
+
+        room.game_action(1, json!({ "kind": "press" }), &me);
+        assert_eq!(
+            last_game_view(&mut phones[0]),
+            Some(json!({ "presses": 1 }))
+        );
+        // Sam and Kim get a fresh view too, still showing only their own presses
+        assert_eq!(
+            last_game_view(&mut phones[1]),
+            Some(json!({ "presses": 0 }))
+        );
+        assert_eq!(
+            last_game_view(&mut phones[2]),
+            Some(json!({ "presses": 0 }))
+        );
+    }
+
+    #[tokio::test]
+    async fn refused_action_sends_no_views() {
+        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
+        let (_commands, me) = test_me();
+        room.start_game(&DUMMY_INFO, &me);
+        last_game_view(&mut phones[1]);
+
+        room.game_action(1, json!({ "kind": "dance" }), &me);
+        assert_eq!(last_game_view(&mut phones[1]), None);
     }
 
     #[tokio::test]
