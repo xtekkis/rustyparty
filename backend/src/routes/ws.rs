@@ -116,6 +116,9 @@ async fn handle_text(
                 ClientMessage::SetAvatar { avatar } => RoomCommand::SetAvatar { player_id, avatar },
                 ClientMessage::Ready { ready } => RoomCommand::Ready { player_id, ready },
                 ClientMessage::Vote { game } => RoomCommand::Vote { player_id, game },
+                ClientMessage::GameAction { action } => {
+                    RoomCommand::GameAction { player_id, action }
+                }
                 ClientMessage::RoomSettings { points_to_win } => RoomCommand::SetPointsToWin {
                     player_id,
                     points_to_win,

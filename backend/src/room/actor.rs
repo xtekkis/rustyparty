@@ -11,6 +11,7 @@ use super::vote::pick_winner;
 use super::{Room, RoomState, clean_nickname, is_valid_points_to_win};
 use crate::games::{GameCtx, GameInfo, Outgoing, Recipient, TimerId, find_game};
 use crate::protocol::ServerMessage;
+use serde_json::Value;
 
 // How many commands can wait for a room before senders have to wait
 const COMMAND_QUEUE_SIZE: usize = 64;
@@ -54,6 +55,10 @@ pub enum RoomCommand {
     Vote {
         player_id: u32,
         game: String,
+    },
+    GameAction {
+        player_id: u32,
+        action: Value,
     },
     SetPointsToWin {
         player_id: u32,
@@ -165,6 +170,9 @@ impl Room {
             RoomCommand::SetAvatar { player_id, avatar } => self.set_avatar(player_id, avatar),
             RoomCommand::Ready { player_id, ready } => self.set_ready(player_id, ready),
             RoomCommand::Vote { player_id, game } => self.vote(player_id, &game),
+            RoomCommand::GameAction { player_id, action } => {
+                self.game_action(player_id, action, me)
+            }
             RoomCommand::SetPointsToWin {
                 player_id,
                 points_to_win,
@@ -323,6 +331,22 @@ impl Room {
             votes.insert(player_id, game.id);
         }
         self.broadcast(&self.vote_message());
+    }
+
+    // Pass a player's move to the game, or tell them why the game refused it
+    fn game_action(&mut self, player_id: u32, action: Value, me: &WeakSender<RoomCommand>) {
+        let RoomState::InGame { game, number } = &mut self.state else {
+            self.send_error(player_id, "not_in_game", "No game is running");
+            return;
+        };
+        let number = *number;
+
+        let mut ctx = GameCtx::default();
+        match game.handle_action(player_id, action, &mut ctx) {
+            Ok(()) => self.run_game_ctx(ctx, number, me),
+            // A refused action has no effects, whatever the game wrote into ctx is dropped
+            Err(error) => self.send_error(player_id, error.code, error.message),
+        }
     }
 
     fn set_points_to_win(&mut self, player_id: u32, points_to_win: u8) {
@@ -617,6 +641,55 @@ mod tests {
             Some(ServerMessage::Error { code, .. }) => code,
             _ => panic!("expected an error"),
         }
+    }
+
+    // The last game event this phone got
+    fn last_game_event(messages: &mut UnboundedReceiver<ServerMessage>) -> Option<Value> {
+        let mut last = None;
+        while let Ok(message) = messages.try_recv() {
+            if let ServerMessage::GameEvent { event } = message {
+                last = Some(event);
+            }
+        }
+        last
+    }
+
+    #[tokio::test]
+    async fn game_action_reaches_the_game() {
+        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
+        let (_commands, me) = test_me();
+        room.start_game(&DUMMY_INFO, &me);
+        for phone in &mut phones {
+            last_game_event(phone);
+        }
+
+        room.game_action(1, json!({ "kind": "press" }), &me);
+        assert_eq!(
+            last_game_event(&mut phones[0]),
+            Some(json!({ "presses": 1 }))
+        );
+        assert_eq!(last_game_event(&mut phones[1]), None, "only Alex hears it");
+    }
+
+    #[tokio::test]
+    async fn refused_game_action_is_explained() {
+        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
+        let (_commands, me) = test_me();
+        room.start_game(&DUMMY_INFO, &me);
+        while phones[0].try_recv().is_ok() {}
+
+        room.game_action(1, json!({ "kind": "dance" }), &me);
+        assert_eq!(error_code(phones[0].try_recv().ok()), "unknown_action");
+    }
+
+    #[test]
+    fn game_action_outside_a_game_is_refused() {
+        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
+        let (_commands, me) = test_me();
+        while phones[0].try_recv().is_ok() {}
+
+        room.game_action(1, json!({ "kind": "press" }), &me);
+        assert_eq!(error_code(phones[0].try_recv().ok()), "not_in_game");
     }
 
     #[tokio::test(start_paused = true)]
