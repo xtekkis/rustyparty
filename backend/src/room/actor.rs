@@ -25,6 +25,9 @@ const MIN_PLAYERS_TO_VOTE: usize = 3;
 // How long players have to vote
 const VOTE_DURATION: Duration = Duration::from_secs(30);
 
+// How long the final scores stay on screen
+const RESULTS_DURATION: Duration = Duration::from_secs(20);
+
 // A room with nobody connected for this long deletes itself
 const EMPTY_ROOM_LIFETIME: Duration = Duration::from_secs(5 * 60);
 
@@ -81,6 +84,10 @@ pub enum RoomCommand {
     GraceOver {
         player_id: u32,
         since: Instant,
+    },
+    // Sent by the room to itself when the results have been shown long enough
+    ResultsOver {
+        number: u32,
     },
     // Sent by the room to itself when the time to vote is up
     VoteTimeout {
@@ -148,6 +155,7 @@ async fn run_room(
         }
 
         room.handle(command, &me);
+        room.finish_game_if_over(&me);
         room.start_vote_if_ready(&me);
         room.end_vote_if_everyone_voted(&me);
         room.watch_if_empty(&me);
@@ -198,6 +206,15 @@ impl Room {
             }
             RoomCommand::PlayerCount { reply } => {
                 let _ = reply.send(self.players.len());
+            }
+            RoomCommand::ResultsOver { number } => {
+                if let RoomState::Results { number: current } = self.state
+                    && current == number
+                {
+                    self.state = RoomState::Lobby;
+                    tracing::info!("Room {} is back in the lobby", self.code);
+                    self.broadcast_players();
+                }
             }
             RoomCommand::VoteTimeout { number } => {
                 if let RoomState::Voting {
@@ -441,6 +458,24 @@ impl Room {
         );
     }
 
+    // The game says it's over: show the results for a while
+    fn finish_game_if_over(&mut self, me: &WeakSender<RoomCommand>) {
+        let RoomState::InGame { game, number } = &self.state else {
+            return;
+        };
+        if !game.is_finished() {
+            return;
+        }
+
+        let number = *number;
+        self.state = RoomState::Results { number };
+        tracing::info!("Game {number} finished in room {}", self.code);
+        self.broadcast(&ServerMessage::Results {
+            ends_in: RESULTS_DURATION.as_secs(),
+        });
+        remind(me, RESULTS_DURATION, RoomCommand::ResultsOver { number });
+    }
+
     // Start a fresh game with everyone who has a seat
     fn start_game(&mut self, info: &GameInfo, me: &WeakSender<RoomCommand>) {
         self.games_started += 1;
@@ -675,6 +710,58 @@ mod tests {
             }
         }
         last
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn finished_game_shows_results_then_the_lobby() {
+        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
+        let (commands, mut reminders) = mpsc::channel(8);
+        let me = commands.downgrade();
+        room.start_game(&DUMMY_INFO, &me);
+
+        // Three presses win the dummy game
+        for _ in 0..3 {
+            room.game_action(1, json!({ "kind": "press" }), &me);
+        }
+        room.finish_game_if_over(&me);
+        assert!(matches!(room.state, RoomState::Results { number: 1 }));
+        let mut got_results = false;
+        while let Ok(message) = phones[1].try_recv() {
+            got_results |= matches!(message, ServerMessage::Results { ends_in: 20 });
+        }
+        assert!(got_results);
+
+        // After 21 seconds only the results reminder is due, the game's 30 second limit isn't
+        tokio::time::sleep(RESULTS_DURATION + Duration::from_secs(1)).await;
+        while let Ok(reminder) = reminders.try_recv() {
+            room.handle(reminder, &me);
+        }
+        assert!(matches!(room.state, RoomState::Lobby));
+        assert!(matches!(
+            phones[1].try_recv(),
+            Ok(ServerMessage::Lobby { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn unfinished_game_keeps_going() {
+        let (mut room, _phones) = room_with(&["Alex", "Sam", "Kim"]);
+        let (_commands, me) = test_me();
+        room.start_game(&DUMMY_INFO, &me);
+        room.game_action(1, json!({ "kind": "press" }), &me);
+
+        room.finish_game_if_over(&me);
+        assert!(matches!(room.state, RoomState::InGame { .. }));
+    }
+
+    #[tokio::test]
+    async fn old_results_timer_is_ignored() {
+        let (mut room, _phones) = room_with(&["Alex", "Sam", "Kim"]);
+        let (_commands, me) = test_me();
+        room.state = RoomState::Results { number: 2 };
+
+        room.handle(RoomCommand::ResultsOver { number: 1 }, &me);
+        assert!(matches!(room.state, RoomState::Results { number: 2 }));
     }
 
     #[tokio::test]

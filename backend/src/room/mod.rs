@@ -48,7 +48,10 @@ pub enum RoomState {
         // Counts up with every game, so a timer from an old game can't reach a new one
         number: u32,
     },
-    Results,
+    Results {
+        // The game that just ended, so an old timer can't end a newer results screen
+        number: u32,
+    },
 }
 
 // A group of players sharing a room code

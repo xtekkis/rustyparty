@@ -95,6 +95,10 @@ pub enum ServerMessage {
     GameEvent {
         event: serde_json::Value,
     },
+    // The game is over, the phone shows the final scores from the last game view
+    Results {
+        ends_in: u64,
+    },
     Error {
         code: String,
         message: String,
