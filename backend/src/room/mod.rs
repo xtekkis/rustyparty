@@ -39,6 +39,9 @@ pub enum RoomState {
     Voting {
         // Player id to the id of the game they picked
         votes: HashMap<u32, &'static str>,
+        // Counts up with every vote, so an old time limit can't end a new vote
+        number: u32,
+        ends_at: Instant,
     },
     InGame {
         game: Box<dyn Game>,
@@ -63,7 +66,8 @@ pub struct Room {
     // When the room last had nobody connected, none while someone is
     empty_since: Option<Instant>,
     next_player_id: u32,
-    // How many games this room has started, used to number them
+    // How many votes and games this room has started, used to number them
+    votes_started: u32,
     games_started: u32,
 }
 
@@ -81,6 +85,7 @@ impl Room {
             banned_tokens: HashSet::new(),
             empty_since: None,
             next_player_id: 1,
+            votes_started: 0,
             games_started: 0,
         }
     }
@@ -133,7 +138,7 @@ impl Room {
         self.players.retain(|player| player.id != player_id);
 
         // Someone who left doesn't get a say
-        if let RoomState::Voting { votes } = &mut self.state {
+        if let RoomState::Voting { votes, .. } = &mut self.state {
             votes.remove(&player_id);
         }
 
@@ -222,17 +227,30 @@ impl Room {
             .collect();
 
         let mut votes: BTreeMap<&'static str, Vec<u32>> = BTreeMap::new();
-        if let RoomState::Voting { votes: picks } = &self.state {
+        let mut ends_in = 0;
+        if let RoomState::Voting {
+            votes: picks,
+            ends_at,
+            ..
+        } = &self.state
+        {
             for (&player_id, &game_id) in picks {
                 votes.entry(game_id).or_default().push(player_id);
             }
+            // Round up, so a vote with half a second left still shows 1
+            let left = ends_at.saturating_duration_since(Instant::now());
+            ends_in = left.as_secs() + u64::from(left.subsec_nanos() > 0);
         }
         // Same order every time, so the phones don't reshuffle the bubbles
         for voters in votes.values_mut() {
             voters.sort();
         }
 
-        ServerMessage::VoteState { options, votes }
+        ServerMessage::VoteState {
+            options,
+            votes,
+            ends_in,
+        }
     }
 
     // Tell everyone who's in the room, and the vote too while one is running

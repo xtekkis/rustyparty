@@ -81,6 +81,8 @@ pub enum ServerMessage {
         options: Vec<VoteOption>,
         // Game id to the ids of the players who voted for it
         votes: BTreeMap<&'static str, Vec<u32>>,
+        // Seconds until voting closes
+        ends_in: u64,
     },
     VoteResult {
         game: String,

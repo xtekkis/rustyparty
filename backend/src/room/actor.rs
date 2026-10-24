@@ -7,6 +7,7 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use super::player::is_known_avatar;
+use super::vote::pick_winner;
 use super::{Room, RoomState, clean_nickname, is_valid_points_to_win};
 use crate::games::{GameCtx, GameInfo, Outgoing, Recipient, TimerId, find_game};
 use crate::protocol::ServerMessage;
@@ -19,6 +20,9 @@ const DISCONNECT_GRACE: Duration = Duration::from_secs(90);
 
 // The game vote needs at least this many players
 const MIN_PLAYERS_TO_VOTE: usize = 3;
+
+// How long players have to vote
+const VOTE_DURATION: Duration = Duration::from_secs(30);
 
 // A room with nobody connected for this long deletes itself
 const EMPTY_ROOM_LIFETIME: Duration = Duration::from_secs(5 * 60);
@@ -72,6 +76,10 @@ pub enum RoomCommand {
     GraceOver {
         player_id: u32,
         since: Instant,
+    },
+    // Sent by the room to itself when the time to vote is up
+    VoteTimeout {
+        number: u32,
     },
     // Sent by the room to itself when a timer a game asked for runs out
     GameTimer {
@@ -135,7 +143,8 @@ async fn run_room(
         }
 
         room.handle(command, &me);
-        room.start_vote_if_ready();
+        room.start_vote_if_ready(&me);
+        room.end_vote_if_everyone_voted(&me);
         room.watch_if_empty(&me);
     }
 }
@@ -181,6 +190,15 @@ impl Room {
             }
             RoomCommand::PlayerCount { reply } => {
                 let _ = reply.send(self.players.len());
+            }
+            RoomCommand::VoteTimeout { number } => {
+                if let RoomState::Voting {
+                    number: current, ..
+                } = &self.state
+                    && *current == number
+                {
+                    self.end_vote(me);
+                }
             }
             RoomCommand::GameTimer { game_number, timer } => {
                 if let RoomState::InGame { game, number } = &mut self.state
@@ -301,7 +319,7 @@ impl Room {
             return;
         }
 
-        if let RoomState::Voting { votes } = &mut self.state {
+        if let RoomState::Voting { votes, .. } = &mut self.state {
             votes.insert(player_id, game.id);
         }
         self.broadcast(&self.vote_message());
@@ -415,7 +433,7 @@ impl Room {
     }
 
     // Everyone connected is ready and there are enough of them: start the game vote
-    fn start_vote_if_ready(&mut self) {
+    fn start_vote_if_ready(&mut self, me: &WeakSender<RoomCommand>) {
         if !matches!(self.state, RoomState::Lobby) {
             return;
         }
@@ -429,11 +447,58 @@ impl Room {
             return;
         }
 
+        self.votes_started += 1;
+        let number = self.votes_started;
         self.state = RoomState::Voting {
             votes: HashMap::new(),
+            number,
+            ends_at: Instant::now() + VOTE_DURATION,
         };
         tracing::info!("Voting started in room {}", self.code);
         self.broadcast(&self.vote_message());
+        remind(me, VOTE_DURATION, RoomCommand::VoteTimeout { number });
+    }
+
+    // No need to wait out the timer once every connected player has picked a game
+    fn end_vote_if_everyone_voted(&mut self, me: &WeakSender<RoomCommand>) {
+        let RoomState::Voting { votes, .. } = &self.state else {
+            return;
+        };
+        let everyone_voted = self
+            .players
+            .iter()
+            .filter(|player| player.disconnected_since.is_none())
+            .all(|player| votes.contains_key(&player.id));
+        if everyone_voted {
+            self.end_vote(me);
+        }
+    }
+
+    // Announce the winner and start it, or go back to the lobby if nobody voted
+    fn end_vote(&mut self, me: &WeakSender<RoomCommand>) {
+        let RoomState::Voting { votes, .. } = std::mem::replace(&mut self.state, RoomState::Lobby)
+        else {
+            return;
+        };
+
+        let Some(winner) = pick_winner(&votes, &mut rand::rng()) else {
+            tracing::info!("Nobody voted in room {}", self.code);
+            // Not ready again until they choose to be, or the vote would start straight away
+            for player in &mut self.players {
+                player.ready = false;
+            }
+            self.broadcast_players();
+            return;
+        };
+
+        tracing::info!("{} won the vote in room {}", winner.game, self.code);
+        self.broadcast(&ServerMessage::VoteResult {
+            game: winner.game.to_string(),
+            tie_break: winner.tie_break,
+        });
+        if let Some(info) = find_game(self.games, winner.game) {
+            self.start_game(info, me);
+        }
     }
 
     // Start the countdown when the last connected player is gone, stop it when someone is back
@@ -647,6 +712,135 @@ mod tests {
         ));
     }
 
+    // A way for code under test to remind the room, kept alive by the returned sender
+    fn test_me() -> (mpsc::Sender<RoomCommand>, WeakSender<RoomCommand>) {
+        let (commands, _receiver) = mpsc::channel(8);
+        let me = commands.downgrade();
+        (commands, me)
+    }
+
+    // Everyone in the room presses ready and the vote starts
+    fn start_vote(room: &mut Room, me: &WeakSender<RoomCommand>) {
+        let ids: Vec<u32> = room.players.iter().map(|player| player.id).collect();
+        for player_id in ids {
+            room.set_ready(player_id, true);
+        }
+        room.start_vote_if_ready(me);
+        assert!(matches!(room.state, RoomState::Voting { .. }));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn vote_state_says_when_voting_ends() {
+        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
+        let (_commands, me) = test_me();
+        start_vote(&mut room, &me);
+
+        let mut ends_in = None;
+        while let Ok(message) = phones[0].try_recv() {
+            if let ServerMessage::VoteState {
+                ends_in: seconds, ..
+            } = message
+            {
+                ends_in = Some(seconds);
+            }
+        }
+        assert_eq!(ends_in, Some(30));
+    }
+
+    #[tokio::test]
+    async fn vote_ends_when_everyone_voted() {
+        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
+        let (_commands, me) = test_me();
+        start_vote(&mut room, &me);
+
+        room.vote(1, "dummy");
+        room.vote(2, "dummy");
+        room.end_vote_if_everyone_voted(&me);
+        assert!(
+            matches!(room.state, RoomState::Voting { .. }),
+            "Kim hasn't voted"
+        );
+
+        room.vote(3, "dummy");
+        room.end_vote_if_everyone_voted(&me);
+        assert!(matches!(room.state, RoomState::InGame { .. }));
+
+        let mut result = None;
+        while let Ok(message) = phones[1].try_recv() {
+            if let ServerMessage::VoteResult { game, tie_break } = message {
+                result = Some((game, tie_break));
+            }
+        }
+        assert_eq!(result, Some(("dummy".to_string(), false)));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn vote_ends_after_30_seconds() {
+        let (mut room, _phones) = room_with(&["Alex", "Sam", "Kim"]);
+        let (commands, mut reminders) = mpsc::channel(8);
+        let me = commands.downgrade();
+        start_vote(&mut room, &me);
+        room.vote(1, "dummy");
+
+        tokio::time::sleep(Duration::from_secs(29)).await;
+        assert!(reminders.try_recv().is_err(), "still voting");
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let timeout = reminders.try_recv().expect("the time limit");
+        room.handle(timeout, &me);
+
+        // Alex's single vote is enough to win
+        assert!(matches!(room.state, RoomState::InGame { .. }));
+    }
+
+    #[tokio::test]
+    async fn nobody_voting_goes_back_to_the_lobby() {
+        let (mut room, _phones) = room_with(&["Alex", "Sam", "Kim"]);
+        let (_commands, me) = test_me();
+        start_vote(&mut room, &me);
+
+        room.handle(RoomCommand::VoteTimeout { number: 1 }, &me);
+        assert!(matches!(room.state, RoomState::Lobby));
+        assert!(room.players.iter().all(|player| !player.ready));
+    }
+
+    #[tokio::test]
+    async fn old_vote_time_limit_is_ignored() {
+        let (mut room, _phones) = room_with(&["Alex", "Sam", "Kim"]);
+        let (_commands, me) = test_me();
+        start_vote(&mut room, &me);
+
+        room.handle(RoomCommand::VoteTimeout { number: 99 }, &me);
+        assert!(matches!(room.state, RoomState::Voting { .. }));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn unanswered_vote_returns_the_room_to_the_lobby() {
+        let (room, _rooms) = spawn_room();
+        let mut phones = Vec::new();
+        for nickname in ["Alex", "Sam", "Kim"] {
+            let (player_id, messages) = join(&room, nickname, None).await;
+            phones.push(messages);
+            room.send(RoomCommand::Ready {
+                player_id: player_id.unwrap(),
+                ready: true,
+            })
+            .await;
+        }
+
+        tokio::time::sleep(VOTE_DURATION + Duration::from_secs(1)).await;
+        player_count(&room).await;
+
+        // The last thing Alex hears is the lobby, with nobody ready
+        let mut last = None;
+        while let Ok(message) = phones[0].try_recv() {
+            last = Some(message);
+        }
+        let Some(ServerMessage::Lobby { players, .. }) = last else {
+            panic!("expected the lobby");
+        };
+        assert!(players.iter().all(|player| !player.ready));
+    }
+
     // A room with these players in it, and their phones' messages
     fn room_with(nicknames: &[&str]) -> (Room, Vec<UnboundedReceiver<ServerMessage>>) {
         let mut room = Room::new("KXTP".to_string());
@@ -670,36 +864,39 @@ mod tests {
         false
     }
 
-    #[test]
-    fn vote_starts_when_everyone_is_ready() {
+    #[tokio::test]
+    async fn vote_starts_when_everyone_is_ready() {
+        let (_commands, me) = test_me();
         let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
         room.set_ready(1, true);
         room.set_ready(2, true);
-        room.start_vote_if_ready();
+        room.start_vote_if_ready(&me);
         assert!(
             matches!(room.state, RoomState::Lobby),
             "Kim isn't ready yet"
         );
 
         room.set_ready(3, true);
-        room.start_vote_if_ready();
+        room.start_vote_if_ready(&me);
         assert!(matches!(room.state, RoomState::Voting { .. }));
         for phone in &mut phones {
             assert!(got_vote_state(phone));
         }
     }
 
-    #[test]
-    fn two_players_are_not_enough() {
+    #[tokio::test]
+    async fn two_players_are_not_enough() {
+        let (_commands, me) = test_me();
         let (mut room, _phones) = room_with(&["Alex", "Sam"]);
         room.set_ready(1, true);
         room.set_ready(2, true);
-        room.start_vote_if_ready();
+        room.start_vote_if_ready(&me);
         assert!(matches!(room.state, RoomState::Lobby));
     }
 
-    #[test]
-    fn disconnected_player_does_not_hold_up_the_vote() {
+    #[tokio::test]
+    async fn disconnected_player_does_not_hold_up_the_vote() {
+        let (_commands, me) = test_me();
         let (mut room, _phones) = room_with(&["Alex", "Sam", "Kim", "Lee"]);
         room.player_mut(4)
             .expect("Lee is in the room")
@@ -707,7 +904,7 @@ mod tests {
         for player_id in 1..=3 {
             room.set_ready(player_id, true);
         }
-        room.start_vote_if_ready();
+        room.start_vote_if_ready(&me);
         assert!(matches!(room.state, RoomState::Voting { .. }));
     }
 
@@ -728,6 +925,8 @@ mod tests {
         let (mut room, phones) = room_with(nicknames);
         room.state = RoomState::Voting {
             votes: HashMap::new(),
+            number: 1,
+            ends_at: Instant::now(),
         };
         (room, phones)
     }
@@ -831,6 +1030,8 @@ mod tests {
         let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
         room.state = RoomState::Voting {
             votes: HashMap::new(),
+            number: 1,
+            ends_at: Instant::now(),
         };
         room.set_ready(1, true);
         assert_eq!(error_code(phones[0].try_recv().ok()), "not_in_lobby");
@@ -892,6 +1093,8 @@ mod tests {
 
         room.state = RoomState::Voting {
             votes: HashMap::new(),
+            number: 1,
+            ends_at: Instant::now(),
         };
         room.set_points_to_win(alex, 10);
         assert_eq!(error_code(messages.try_recv().ok()), "not_in_lobby");
