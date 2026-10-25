@@ -189,8 +189,8 @@ impl Room {
                 player_id,
                 target_id,
                 ban,
-            } => self.remove_by_host(player_id, target_id, ban),
-            RoomCommand::Leave { player_id } => self.leave(player_id),
+            } => self.remove_by_host(player_id, target_id, ban, me),
+            RoomCommand::Leave { player_id } => self.leave(player_id, me),
             RoomCommand::Disconnect {
                 player_id,
                 connection,
@@ -202,6 +202,7 @@ impl Room {
                         self.code
                     );
                     self.broadcast_players();
+                    self.tell_game_about_leaver(player_id, me);
                 }
             }
             RoomCommand::PlayerCount { reply } => {
@@ -405,7 +406,13 @@ impl Room {
     }
 
     // Host kicks or bans another player
-    fn remove_by_host(&mut self, player_id: u32, target_id: u32, ban: bool) {
+    fn remove_by_host(
+        &mut self,
+        player_id: u32,
+        target_id: u32,
+        ban: bool,
+        me: &WeakSender<RoomCommand>,
+    ) {
         if self.host != Some(player_id) {
             self.send_error(player_id, "not_host", "Only the host can do that");
             return;
@@ -436,13 +443,26 @@ impl Room {
         let action = if ban { "banned" } else { "kicked" };
         tracing::info!("Player {target_id} was {action} from room {}", self.code);
         self.broadcast_players();
+        self.tell_game_about_leaver(target_id, me);
     }
 
-    fn leave(&mut self, player_id: u32) {
+    fn leave(&mut self, player_id: u32, me: &WeakSender<RoomCommand>) {
         if self.remove_player(player_id) {
             tracing::info!("Player {player_id} left room {}", self.code);
             self.broadcast_players();
+            self.tell_game_about_leaver(player_id, me);
         }
+    }
+
+    // Someone is gone for good, the game may need to cancel a round or end
+    fn tell_game_about_leaver(&mut self, player_id: u32, me: &WeakSender<RoomCommand>) {
+        let RoomState::InGame { game, number } = &mut self.state else {
+            return;
+        };
+        let number = *number;
+        let mut ctx = GameCtx::default();
+        game.player_left(player_id, &mut ctx);
+        self.run_game_ctx(ctx, number, me);
     }
 
     // Keep the seat for a while, the player can come back with their token
@@ -1238,11 +1258,55 @@ mod tests {
     #[test]
     fn leaving_takes_back_the_vote() {
         let (mut room, mut phones) = voting_room(&["Alex", "Sam", "Kim", "Lee"]);
+        let (_commands, me) = test_me();
         room.vote(4, "dummy");
-        room.leave(4);
+        room.leave(4, &me);
 
         let votes = latest_votes(&mut phones[0]).expect("a vote_state");
         assert!(votes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_game_hears_when_someone_leaves_for_good() {
+        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim", "Lee"]);
+        let (_commands, me) = test_me();
+        room.start_game(&DUMMY_INFO, &me);
+        last_game_event(&mut phones[0]);
+
+        room.leave(4, &me);
+        assert_eq!(
+            last_game_event(&mut phones[0]),
+            Some(json!({ "event": "left", "player": 4 }))
+        );
+
+        room.remove_by_host(1, 3, false, &me);
+        room.finish_game_if_over(&me);
+        // Kim was kicked, two players are too few, so the game ends
+        assert!(matches!(room.state, RoomState::Results { .. }));
+    }
+
+    #[tokio::test]
+    async fn the_game_hears_when_a_grace_period_runs_out() {
+        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim", "Lee"]);
+        let (_commands, me) = test_me();
+        room.start_game(&DUMMY_INFO, &me);
+        let since = Instant::now();
+        room.player_mut(4)
+            .expect("Lee is in the room")
+            .disconnected_since = Some(since);
+        last_game_event(&mut phones[0]);
+
+        room.handle(
+            RoomCommand::GraceOver {
+                player_id: 4,
+                since,
+            },
+            &me,
+        );
+        assert_eq!(
+            last_game_event(&mut phones[0]),
+            Some(json!({ "event": "left", "player": 4 }))
+        );
     }
 
     #[tokio::test]

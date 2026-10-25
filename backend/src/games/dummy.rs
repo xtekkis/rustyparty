@@ -9,6 +9,9 @@ use crate::protocol::RoomSettings;
 // First to press this many times wins
 const PRESSES_TO_WIN: u32 = 3;
 
+// Like Bad Takes, the game can't go on with fewer players than this
+const MIN_PLAYERS: usize = 3;
+
 const TIME_LIMIT_TIMER: TimerId = 1;
 const TIME_LIMIT: Duration = Duration::from_secs(30);
 
@@ -16,7 +19,7 @@ pub static DUMMY_INFO: GameInfo = GameInfo {
     id: "dummy",
     name: "Dummy",
     description: "Press the button, first to 3 wins",
-    min_players: 3,
+    min_players: MIN_PLAYERS,
     max_players: 10,
     create,
 };
@@ -87,8 +90,15 @@ impl Game for DummyGame {
         self.presses.insert(player, 0);
     }
 
-    fn player_left(&mut self, player: PlayerId, _ctx: &mut GameCtx) {
-        self.presses.remove(&player);
+    fn player_left(&mut self, player: PlayerId, ctx: &mut GameCtx) {
+        if self.presses.remove(&player).is_none() {
+            return;
+        }
+        ctx.broadcast(json!({ "event": "left", "player": player }));
+        if !self.finished && self.presses.len() < MIN_PLAYERS {
+            self.finished = true;
+            ctx.broadcast(json!({ "event": "not_enough_players" }));
+        }
     }
 
     // Each player only sees their own presses
@@ -199,6 +209,23 @@ mod tests {
         assert_eq!(
             press(&mut game, 1, &mut ctx).unwrap_err().code,
             "not_playing"
+        );
+    }
+
+    #[test]
+    fn too_few_players_ends_the_game() {
+        let mut game = started_game();
+        let mut ctx = GameCtx::default();
+        game.player_left(3, &mut ctx);
+
+        assert!(game.is_finished());
+        let messages: Vec<&Value> = ctx.outgoing.iter().map(|out| &out.message).collect();
+        assert_eq!(
+            messages,
+            [
+                &json!({ "event": "left", "player": 3 }),
+                &json!({ "event": "not_enough_players" }),
+            ]
         );
     }
 
