@@ -211,9 +211,7 @@ impl Room {
                 if let RoomState::Results { number: current } = self.state
                     && current == number
                 {
-                    self.state = RoomState::Lobby;
-                    tracing::info!("Room {} is back in the lobby", self.code);
-                    self.broadcast_players();
+                    self.return_to_lobby();
                 }
             }
             RoomCommand::VoteTimeout { number } => {
@@ -458,6 +456,16 @@ impl Room {
         );
     }
 
+    // Nobody is ready again until they choose to be, or the vote would start straight away
+    fn return_to_lobby(&mut self) {
+        self.state = RoomState::Lobby;
+        for player in &mut self.players {
+            player.ready = false;
+        }
+        tracing::info!("Room {} is back in the lobby", self.code);
+        self.broadcast_players();
+    }
+
     // The game says it's over: show the results for a while
     fn finish_game_if_over(&mut self, me: &WeakSender<RoomCommand>) {
         let RoomState::InGame { game, number } = &self.state else {
@@ -542,11 +550,7 @@ impl Room {
 
         let Some(winner) = pick_winner(&votes, &mut rand::rng()) else {
             tracing::info!("Nobody voted in room {}", self.code);
-            // Not ready again until they choose to be, or the vote would start straight away
-            for player in &mut self.players {
-                player.ready = false;
-            }
-            self.broadcast_players();
+            self.return_to_lobby();
             return;
         };
 
@@ -741,6 +745,41 @@ mod tests {
             phones[1].try_recv(),
             Ok(ServerMessage::Lobby { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn after_a_game_nobody_is_ready_and_no_vote_starts() {
+        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
+        let (_commands, me) = test_me();
+
+        // A whole round: everyone ready, vote, game, results
+        start_vote(&mut room, &me);
+        for player_id in 1..=3 {
+            room.vote(player_id, "dummy");
+        }
+        room.end_vote_if_everyone_voted(&me);
+        for _ in 0..3 {
+            room.game_action(1, json!({ "kind": "press" }), &me);
+        }
+        room.finish_game_if_over(&me);
+        room.handle(RoomCommand::ResultsOver { number: 1 }, &me);
+
+        assert!(matches!(room.state, RoomState::Lobby));
+        assert!(room.players.iter().all(|player| !player.ready));
+        room.start_vote_if_ready(&me);
+        assert!(
+            matches!(room.state, RoomState::Lobby),
+            "no vote until they're ready"
+        );
+
+        let mut last_lobby = None;
+        while let Ok(message) = phones[2].try_recv() {
+            if let ServerMessage::Lobby { players, .. } = message {
+                last_lobby = Some(players);
+            }
+        }
+        let players = last_lobby.expect("a lobby update");
+        assert!(players.iter().all(|player| !player.ready));
     }
 
     #[tokio::test]
