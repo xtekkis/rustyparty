@@ -172,7 +172,7 @@ impl Room {
                 connection,
                 reply,
             } => {
-                let player_id = self.join(nickname, avatar, token, connection);
+                let player_id = self.join(nickname, avatar, token, connection, me);
                 let _ = reply.send(player_id);
             }
             RoomCommand::SetAvatar { player_id, avatar } => self.set_avatar(player_id, avatar),
@@ -244,6 +244,7 @@ impl Room {
         avatar: Option<String>,
         token: Option<String>,
         connection: Connection,
+        me: &WeakSender<RoomCommand>,
     ) -> Option<u32> {
         // A saved token means this phone was here before
         if let Some(token) = token {
@@ -264,6 +265,8 @@ impl Room {
                     },
                 );
                 self.broadcast_players();
+                // Back mid-game: show them where things are right away
+                self.send_game_view_to(id);
                 return Some(id);
             }
         }
@@ -294,7 +297,19 @@ impl Room {
             },
         );
         self.broadcast_players();
+        self.tell_game_about_late_joiner(id, me);
         Some(id)
+    }
+
+    // The game decides when they start playing, usually at its next round
+    fn tell_game_about_late_joiner(&mut self, player_id: u32, me: &WeakSender<RoomCommand>) {
+        let RoomState::InGame { game, number } = &mut self.state else {
+            return;
+        };
+        let number = *number;
+        let mut ctx = GameCtx::default();
+        game.player_joined(player_id, &mut ctx);
+        self.run_game_ctx(ctx, number, me);
     }
 
     fn set_avatar(&mut self, player_id: u32, avatar: Option<String>) {
@@ -595,13 +610,17 @@ impl Room {
 
     // Every player gets the game as they are allowed to see it, never someone else's
     fn send_game_views(&self) {
+        for player in &self.players {
+            self.send_game_view_to(player.id);
+        }
+    }
+
+    fn send_game_view_to(&self, player_id: u32) {
         let RoomState::InGame { game, .. } = &self.state else {
             return;
         };
-        for player in &self.players {
-            let view = game.view_for(player.id);
-            send(&player.sender, ServerMessage::GameView { view });
-        }
+        let view = game.view_for(player_id);
+        self.send_to_player(player_id, ServerMessage::GameView { view });
     }
 
     // Send what a game asked to send, each one wrapped as a game event
@@ -1226,13 +1245,44 @@ mod tests {
         assert!(votes.is_empty());
     }
 
+    #[tokio::test]
+    async fn late_joiner_is_passed_to_the_game() {
+        let (mut room, _phones) = room_with(&["Alex", "Sam", "Kim"]);
+        let (_commands, me) = test_me();
+        room.start_game(&DUMMY_INFO, &me);
+
+        let (connection, mut messages) = mpsc::unbounded_channel();
+        let lee = room
+            .join("Lee".to_string(), None, None, connection, &me)
+            .expect("Lee joins");
+        assert_eq!(last_game_view(&mut messages), Some(json!({ "presses": 0 })));
+
+        // The dummy game lets late joiners play at once
+        room.game_action(lee, json!({ "kind": "press" }), &me);
+        assert_eq!(last_game_view(&mut messages), Some(json!({ "presses": 1 })));
+    }
+
+    #[tokio::test]
+    async fn reconnecting_mid_game_shows_the_game_at_once() {
+        let (mut room, _phones) = room_with(&["Alex", "Sam", "Kim"]);
+        let (_commands, me) = test_me();
+        room.start_game(&DUMMY_INFO, &me);
+        room.game_action(1, json!({ "kind": "press" }), &me);
+        let token = room.players[0].token.clone();
+
+        let (connection, mut messages) = mpsc::unbounded_channel();
+        room.join("Alex".to_string(), None, Some(token), connection, &me);
+        assert_eq!(last_game_view(&mut messages), Some(json!({ "presses": 1 })));
+    }
+
     #[test]
     fn joining_during_the_vote_shows_the_vote() {
         let (mut room, _phones) = voting_room(&["Alex", "Sam", "Kim"]);
+        let (_commands, me) = test_me();
         room.vote(1, "dummy");
 
         let (connection, mut messages) = mpsc::unbounded_channel();
-        let lee = room.join("Lee".to_string(), None, None, connection);
+        let lee = room.join("Lee".to_string(), None, None, connection, &me);
         assert!(lee.is_some());
         let votes = latest_votes(&mut messages).expect("Lee gets the vote");
         assert_eq!(votes, BTreeMap::from([("dummy", vec![1])]));
