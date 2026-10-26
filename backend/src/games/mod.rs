@@ -1,3 +1,4 @@
+pub mod bad_takes;
 #[cfg(test)]
 pub mod dummy;
 
