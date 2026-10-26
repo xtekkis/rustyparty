@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 use std::sync::LazyLock;
 
+use rand::Rng;
+use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 
 pub type CardId = u32;
@@ -31,6 +33,31 @@ pub struct PromptCard {
 pub struct AnswerCard {
     pub id: CardId,
     pub text: String,
+}
+
+// A pile of cards in random order, drawn from the top
+pub struct Deck<T> {
+    cards: Vec<T>,
+}
+
+impl<T> Deck<T> {
+    pub fn shuffled(mut cards: Vec<T>, rng: &mut impl Rng) -> Deck<T> {
+        cards.shuffle(rng);
+        Deck { cards }
+    }
+
+    // The top card, none when the deck is empty
+    pub fn draw(&mut self) -> Option<T> {
+        self.cards.pop()
+    }
+
+    pub fn len(&self) -> usize {
+        self.cards.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.cards.is_empty()
+    }
 }
 
 // All the cards in one deck file
@@ -91,6 +118,23 @@ fn first_duplicate(ids: impl Iterator<Item = CardId>) -> Option<CardId> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn drawing_takes_every_card_once_then_none() {
+        let mut deck = Deck::shuffled(vec![1, 2, 3], &mut rand::rng());
+        assert_eq!(deck.len(), 3);
+
+        let mut drawn = vec![
+            deck.draw().unwrap(),
+            deck.draw().unwrap(),
+            deck.draw().unwrap(),
+        ];
+        assert!(deck.is_empty());
+        assert_eq!(deck.draw(), None);
+
+        drawn.sort();
+        assert_eq!(drawn, [1, 2, 3]);
+    }
 
     #[test]
     fn starter_deck_loads() {
