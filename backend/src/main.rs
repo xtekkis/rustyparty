@@ -26,6 +26,15 @@ async fn main() {
         )
         .init();
 
+    // A broken card file stops the server here, not in the middle of a game
+    let deck = games::bad_takes::deck::starter_deck();
+    tracing::info!(
+        "Loaded deck {}: {} prompts, {} answers",
+        deck.name,
+        deck.prompts.len(),
+        deck.answers.len()
+    );
+
     let state = AppState::default();
 
     let app = routes::router(state).layer(TraceLayer::new_for_http());
