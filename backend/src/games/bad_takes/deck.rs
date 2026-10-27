@@ -172,8 +172,8 @@ mod tests {
     fn starter_deck_loads() {
         let deck = starter_deck();
         assert_eq!(deck.name, "Starter");
-        assert_eq!(deck.prompts.len(), 30);
-        assert_eq!(deck.answers.len(), 70);
+        assert_eq!(deck.prompts.len(), 45);
+        assert_eq!(deck.answers.len(), 140);
     }
 
     // A small valid deck as JSON text, with one prompt changed by the test

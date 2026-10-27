@@ -98,11 +98,11 @@ mod tests {
     fn bad_takes_is_in_the_registry() {
         let info = find_game(&GAMES, "bad_takes").expect("Bad Takes is registered");
         assert_eq!(info.name, "Bad Takes");
-        // The 70 card starter deck allows 3 to 5 players
+        // The 140 answer starter deck allows 3 to 10 players
         assert!(!info.fits(2));
         assert!(info.fits(3));
-        assert!(info.fits(5));
-        assert!(!info.fits(6));
+        assert!(info.fits(10));
+        assert!(!info.fits(11));
     }
 
     #[test]
