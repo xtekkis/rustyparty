@@ -81,7 +81,7 @@ impl Room {
             state: RoomState::Lobby,
             players: Vec::new(),
             host: None,
-            games: GAMES,
+            games: &GAMES,
             settings: RoomSettings {
                 points_to_win: POINTS_TO_WIN_DEFAULT,
             },

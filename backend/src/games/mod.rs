@@ -2,6 +2,7 @@ pub mod bad_takes;
 #[cfg(test)]
 pub mod dummy;
 
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use serde_json::Value;
@@ -106,8 +107,8 @@ impl GameInfo {
     }
 }
 
-// Every game players can vote for
-pub static GAMES: &[GameInfo] = &[bad_takes::INFO];
+// Every game players can vote for, built on first use because some limits depend on the cards
+pub static GAMES: LazyLock<Vec<GameInfo>> = LazyLock::new(|| vec![bad_takes::info()]);
 
 pub fn find_game<'a>(games: &'a [GameInfo], id: &str) -> Option<&'a GameInfo> {
     games.iter().find(|game| game.id == id)
