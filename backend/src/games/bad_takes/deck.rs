@@ -117,7 +117,39 @@ fn first_duplicate(ids: impl Iterator<Item = CardId>) -> Option<CardId> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
     use serde_json::json;
+
+    // The ids of the starter answers in the order a deck seeded like this deals them
+    fn dealt_ids(seed: u64) -> Vec<CardId> {
+        let answers = starter_deck().answers.clone();
+        let mut deck = Deck::shuffled(answers, &mut StdRng::seed_from_u64(seed));
+        std::iter::from_fn(|| deck.draw())
+            .map(|card| card.id)
+            .collect()
+    }
+
+    #[test]
+    fn same_seed_deals_the_same_order() {
+        assert_eq!(dealt_ids(42), dealt_ids(42));
+    }
+
+    #[test]
+    fn different_seeds_deal_different_orders() {
+        assert_ne!(dealt_ids(1), dealt_ids(2));
+    }
+
+    #[test]
+    fn shuffling_changes_the_order() {
+        let file_order: Vec<CardId> = starter_deck().answers.iter().map(|card| card.id).collect();
+        let mut dealt = dealt_ids(7);
+        assert_ne!(dealt, file_order);
+
+        // Every card is still there exactly once
+        dealt.sort();
+        assert_eq!(dealt, file_order);
+    }
 
     #[test]
     fn drawing_takes_every_card_once_then_none() {
