@@ -107,7 +107,7 @@ impl GameInfo {
 }
 
 // Every game players can vote for
-pub static GAMES: &[GameInfo] = &[];
+pub static GAMES: &[GameInfo] = &[bad_takes::INFO];
 
 pub fn find_game<'a>(games: &'a [GameInfo], id: &str) -> Option<&'a GameInfo> {
     games.iter().find(|game| game.id == id)
