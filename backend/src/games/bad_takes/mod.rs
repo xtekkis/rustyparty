@@ -104,6 +104,13 @@ impl BadTakes {
         card_ids: Vec<CardId>,
         ctx: &mut GameCtx,
     ) -> Result<(), GameError> {
+        // The judge picks the winner, so they can't play a card of their own
+        if self.judge == Some(player) {
+            return Err(GameError {
+                code: "judge_cannot_submit",
+                message: "You're the judge this round",
+            });
+        }
         if self.submissions.contains_key(&player) {
             return Err(GameError {
                 code: "already_submitted",
@@ -308,6 +315,20 @@ mod tests {
         assert_eq!(kim_sees["submitted"], json!([2]));
         assert!(!kim_sees.to_string().contains(&card.text));
         assert_eq!(game.view_for(2)["my_submission"], json!([card]));
+    }
+
+    #[test]
+    fn the_judge_cannot_submit() {
+        let mut game = started_game(&[1, 2, 3]);
+        let card = game.hands[&1][0].id;
+
+        let result = submit(&mut game, 1, &[card]);
+        assert_eq!(
+            result.err().map(|error| error.code),
+            Some("judge_cannot_submit")
+        );
+        assert_eq!(game.hands[&1].len(), HAND_SIZE, "the judge keeps the card");
+        assert!(game.submissions.is_empty());
     }
 
     #[test]
