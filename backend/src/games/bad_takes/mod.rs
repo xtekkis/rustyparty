@@ -49,6 +49,9 @@ pub struct BadTakes {
     answers: Deck<AnswerCard>,
     // Each player's cards, only ever shown to that player
     hands: HashMap<PlayerId, Vec<AnswerCard>>,
+    round: u32,
+    judge: Option<PlayerId>,
+    prompt: Option<PromptCard>,
 }
 
 impl BadTakes {
@@ -65,7 +68,23 @@ impl BadTakes {
             prompts: Deck::shuffled(prompts, rng),
             answers: Deck::shuffled(answers, rng),
             hands: HashMap::new(),
+            round: 0,
+            judge: None,
+            prompt: None,
         }
+    }
+
+    // A new judge reads out a new prompt
+    fn start_round(&mut self, ctx: &mut GameCtx) {
+        self.round += 1;
+        self.judge = self.players.first().copied();
+        self.prompt = self.prompts.draw();
+        ctx.broadcast(json!({
+            "event": "round_started",
+            "round": self.round,
+            "judge": self.judge,
+            "prompt": self.prompt,
+        }));
     }
 
     // Fill a player's hand up to 7 cards
@@ -81,11 +100,12 @@ impl BadTakes {
 }
 
 impl Game for BadTakes {
-    fn start(&mut self, players: &[PlayerId], _ctx: &mut GameCtx) {
+    fn start(&mut self, players: &[PlayerId], ctx: &mut GameCtx) {
         self.players = players.to_vec();
         for &player in players {
             self.deal_to(player);
         }
+        self.start_round(ctx);
     }
 
     fn handle_action(
@@ -112,6 +132,9 @@ impl Game for BadTakes {
     fn view_for(&self, player: PlayerId) -> Value {
         json!({
             "points_to_win": self.points_to_win,
+            "round": self.round,
+            "judge": self.judge,
+            "prompt": self.prompt,
             "hand": self.hands.get(&player),
         })
     }
@@ -124,7 +147,7 @@ impl Game for BadTakes {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::games::{GAMES, find_game};
+    use crate::games::{GAMES, Recipient, find_game};
     use rand::SeedableRng;
     use rand::rngs::StdRng;
     use std::collections::HashSet;
@@ -156,6 +179,41 @@ mod tests {
         let game = started_game(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         let ids: HashSet<_> = game.hands.values().flatten().map(|card| card.id).collect();
         assert_eq!(ids.len(), 10 * HAND_SIZE);
+    }
+
+    #[test]
+    fn first_player_judges_the_first_round() {
+        let cards = deck::starter_deck();
+        let mut game = BadTakes::new(
+            7,
+            cards.prompts.clone(),
+            cards.answers.clone(),
+            &mut StdRng::seed_from_u64(1),
+        );
+        let mut ctx = GameCtx::default();
+        game.start(&[4, 2, 9], &mut ctx);
+
+        assert_eq!(game.round, 1);
+        assert_eq!(game.judge, Some(4));
+        let prompt = game.prompt.clone().expect("a prompt is revealed");
+        assert_eq!(game.prompts.len(), 45 - 1);
+
+        // Everyone hears the round start
+        assert_eq!(ctx.outgoing.len(), 1);
+        assert_eq!(ctx.outgoing[0].to, Recipient::Everyone);
+        assert_eq!(
+            ctx.outgoing[0].message,
+            json!({ "event": "round_started", "round": 1, "judge": 4, "prompt": prompt })
+        );
+    }
+
+    #[test]
+    fn views_show_the_round_judge_and_prompt() {
+        let game = started_game(&[1, 2, 3]);
+        let view = game.view_for(2);
+        assert_eq!(view["round"], 1);
+        assert_eq!(view["judge"], 1);
+        assert_eq!(view["prompt"], json!(game.prompt));
     }
 
     #[test]
