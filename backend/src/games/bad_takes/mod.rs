@@ -4,9 +4,10 @@ pub mod deck;
 use std::collections::HashMap;
 
 use rand::Rng;
+use serde::Deserialize;
 use serde_json::{Value, json};
 
-use deck::{AnswerCard, Deck, PromptCard};
+use deck::{AnswerCard, CardId, Deck, PromptCard};
 
 use super::{Game, GameCtx, GameError, GameInfo, PlayerId, TimerId};
 use crate::protocol::RoomSettings;
@@ -42,6 +43,13 @@ fn create(settings: &RoomSettings) -> Box<dyn Game> {
     ))
 }
 
+// What players can do, sent as {"kind": "submit", ...}
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum Action {
+    Submit { cards: Vec<CardId> },
+}
+
 pub struct BadTakes {
     points_to_win: u8,
     players: Vec<PlayerId>,
@@ -52,6 +60,8 @@ pub struct BadTakes {
     round: u32,
     judge: Option<PlayerId>,
     prompt: Option<PromptCard>,
+    // The cards each player put down this round, kept secret until the judge reads them
+    submissions: HashMap<PlayerId, Vec<AnswerCard>>,
 }
 
 impl BadTakes {
@@ -71,6 +81,7 @@ impl BadTakes {
             round: 0,
             judge: None,
             prompt: None,
+            submissions: HashMap::new(),
         }
     }
 
@@ -85,6 +96,41 @@ impl BadTakes {
             "judge": self.judge,
             "prompt": self.prompt,
         }));
+    }
+
+    fn submit(
+        &mut self,
+        player: PlayerId,
+        card_ids: Vec<CardId>,
+        ctx: &mut GameCtx,
+    ) -> Result<(), GameError> {
+        if self.submissions.contains_key(&player) {
+            return Err(GameError {
+                code: "already_submitted",
+                message: "You already played your cards this round",
+            });
+        }
+
+        // Take the cards out of the hand, in the order they were picked
+        let hand = self.hands.entry(player).or_default();
+        let mut cards = Vec::new();
+        for id in card_ids {
+            if let Some(index) = hand.iter().position(|card| card.id == id) {
+                cards.push(hand.remove(index));
+            }
+        }
+        self.submissions.insert(player, cards);
+
+        // Everyone sees who has played, nobody sees what
+        ctx.broadcast(json!({ "event": "submitted", "player": player }));
+        Ok(())
+    }
+
+    // Who has played this round, in a fixed order
+    fn submitted_players(&self) -> Vec<PlayerId> {
+        let mut players: Vec<PlayerId> = self.submissions.keys().copied().collect();
+        players.sort();
+        players
     }
 
     // Fill a player's hand up to 7 cards
@@ -110,14 +156,19 @@ impl Game for BadTakes {
 
     fn handle_action(
         &mut self,
-        _player: PlayerId,
-        _action: Value,
-        _ctx: &mut GameCtx,
+        player: PlayerId,
+        action: Value,
+        ctx: &mut GameCtx,
     ) -> Result<(), GameError> {
-        Err(GameError {
-            code: "unknown_action",
-            message: "That action doesn't exist in this game",
-        })
+        let Ok(action) = serde_json::from_value::<Action>(action) else {
+            return Err(GameError {
+                code: "unknown_action",
+                message: "That action doesn't exist in this game",
+            });
+        };
+        match action {
+            Action::Submit { cards } => self.submit(player, cards, ctx),
+        }
     }
 
     fn handle_timer(&mut self, _timer: TimerId, _ctx: &mut GameCtx) {}
@@ -136,6 +187,8 @@ impl Game for BadTakes {
             "judge": self.judge,
             "prompt": self.prompt,
             "hand": self.hands.get(&player),
+            "submitted": self.submitted_players(),
+            "my_submission": self.submissions.get(&player),
         })
     }
 
@@ -214,6 +267,74 @@ mod tests {
         assert_eq!(view["round"], 1);
         assert_eq!(view["judge"], 1);
         assert_eq!(view["prompt"], json!(game.prompt));
+    }
+
+    fn submit(
+        game: &mut BadTakes,
+        player: PlayerId,
+        cards: &[CardId],
+    ) -> Result<GameCtx, GameError> {
+        let mut ctx = GameCtx::default();
+        game.handle_action(
+            player,
+            json!({ "kind": "submit", "cards": cards }),
+            &mut ctx,
+        )?;
+        Ok(ctx)
+    }
+
+    #[test]
+    fn submitted_cards_leave_the_hand() {
+        let mut game = started_game(&[1, 2, 3]);
+        let card = game.hands[&2][0].clone();
+
+        submit(&mut game, 2, &[card.id]).unwrap();
+        assert_eq!(game.hands[&2].len(), HAND_SIZE - 1);
+        assert!(!game.hands[&2].contains(&card));
+        assert_eq!(game.submissions[&2], [card]);
+    }
+
+    #[test]
+    fn everyone_sees_who_submitted_but_not_what() {
+        let mut game = started_game(&[1, 2, 3]);
+        let card = game.hands[&2][0].clone();
+        let ctx = submit(&mut game, 2, &[card.id]).unwrap();
+
+        assert_eq!(
+            ctx.outgoing[0].message,
+            json!({ "event": "submitted", "player": 2 })
+        );
+        let kim_sees = game.view_for(3);
+        assert_eq!(kim_sees["submitted"], json!([2]));
+        assert!(!kim_sees.to_string().contains(&card.text));
+        assert_eq!(game.view_for(2)["my_submission"], json!([card]));
+    }
+
+    #[test]
+    fn submitting_twice_is_refused() {
+        let mut game = started_game(&[1, 2, 3]);
+        let first = game.hands[&2][0].id;
+        let second = game.hands[&2][1].id;
+        submit(&mut game, 2, &[first]).unwrap();
+
+        let again = submit(&mut game, 2, &[second]);
+        assert_eq!(
+            again.err().map(|error| error.code),
+            Some("already_submitted")
+        );
+        assert_eq!(
+            game.hands[&2].len(),
+            HAND_SIZE - 1,
+            "the second card stays in the hand"
+        );
+    }
+
+    #[test]
+    fn unknown_actions_are_refused() {
+        let mut game = started_game(&[1, 2, 3]);
+        let mut ctx = GameCtx::default();
+        let result = game.handle_action(2, json!({ "kind": "dance" }), &mut ctx);
+        assert_eq!(result.err().map(|error| error.code), Some("unknown_action"));
     }
 
     #[test]
