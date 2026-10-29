@@ -127,8 +127,15 @@ impl BadTakes {
             });
         }
 
+        // Late joiners have no hand until the next round
+        let Some(hand) = self.hands.get_mut(&player) else {
+            return Err(GameError {
+                code: "not_playing",
+                message: "You join at the next round",
+            });
+        };
+
         // Check every card before taking any, so a refused submission leaves the hand as it was
-        let hand = self.hands.entry(player).or_default();
         let all_held = card_ids
             .iter()
             .all(|&id| hand.iter().any(|card| card.id == id));
@@ -427,6 +434,64 @@ mod tests {
             Some("card_not_in_hand")
         );
         assert_eq!(game.hands[&2].len(), HAND_SIZE);
+    }
+
+    #[test]
+    fn someone_without_a_hand_cannot_submit() {
+        let mut game = started_game(&[1, 2, 3]);
+        let result = submit(&mut game, 99, &[1]);
+
+        assert_eq!(result.err().map(|error| error.code), Some("not_playing"));
+        assert!(!game.hands.contains_key(&99), "no hand is made for them");
+    }
+
+    #[test]
+    fn no_prompt_means_no_submissions() {
+        let mut game = started_game(&[1, 2, 3]);
+        game.prompt = None;
+        let card = game.hands[&2][0].id;
+
+        let result = submit(&mut game, 2, &[card]);
+        assert_eq!(
+            result.err().map(|error| error.code),
+            Some("wrong_card_count")
+        );
+    }
+
+    #[test]
+    fn a_malformed_submit_is_refused() {
+        let mut game = started_game(&[1, 2, 3]);
+        let mut ctx = GameCtx::default();
+        let result = game.handle_action(2, json!({ "kind": "submit", "cards": "12" }), &mut ctx);
+        assert_eq!(result.err().map(|error| error.code), Some("unknown_action"));
+    }
+
+    #[test]
+    fn a_refused_submission_changes_nothing() {
+        let mut game = started_game(&[1, 2, 3]);
+        let sams_card = game.hands[&2][0].id;
+        let kims_card = game.hands[&3][0].id;
+        let hands_before = game.hands.clone();
+
+        // The judge, a card Sam doesn't hold, too many cards, and someone not playing
+        let attempts: [(PlayerId, Vec<CardId>); 4] = [
+            (1, vec![game.hands[&1][0].id]),
+            (2, vec![kims_card]),
+            (2, vec![sams_card, sams_card]),
+            (99, vec![sams_card]),
+        ];
+        for (player, cards) in attempts {
+            let mut ctx = GameCtx::default();
+            let result = game.handle_action(
+                player,
+                json!({ "kind": "submit", "cards": cards }),
+                &mut ctx,
+            );
+            assert!(result.is_err());
+            assert!(ctx.outgoing.is_empty(), "a refused submission tells nobody");
+        }
+        assert_eq!(game.hands, hands_before);
+        assert!(game.submissions.is_empty());
     }
 
     #[test]
