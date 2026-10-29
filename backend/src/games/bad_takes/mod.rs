@@ -118,6 +118,15 @@ impl BadTakes {
             });
         }
 
+        // One card per gap, a pick 2 prompt fills its gaps in the order the cards were picked
+        let gaps = self.prompt.as_ref().map(|prompt| usize::from(prompt.pick));
+        if gaps != Some(card_ids.len()) {
+            return Err(GameError {
+                code: "wrong_card_count",
+                message: "Play one card for each gap in the prompt",
+            });
+        }
+
         // Check every card before taking any, so a refused submission leaves the hand as it was
         let hand = self.hands.entry(player).or_default();
         let all_held = card_ids
@@ -236,7 +245,51 @@ mod tests {
             &mut StdRng::seed_from_u64(1),
         );
         game.start(players, &mut GameCtx::default());
+        // A known pick 1 prompt, so tests don't depend on what the shuffle revealed
+        game.prompt = Some(starter_prompt(2));
         game
+    }
+
+    fn starter_prompt(id: CardId) -> PromptCard {
+        deck::starter_deck()
+            .prompts
+            .iter()
+            .find(|prompt| prompt.id == id)
+            .cloned()
+            .expect("the starter deck has this prompt")
+    }
+
+    #[test]
+    fn a_pick_1_prompt_takes_exactly_one_card() {
+        let mut game = started_game(&[1, 2, 3]);
+        let hand: Vec<CardId> = game.hands[&2].iter().map(|card| card.id).collect();
+
+        for cards in [vec![], vec![hand[0], hand[1]]] {
+            let result = submit(&mut game, 2, &cards);
+            assert_eq!(
+                result.err().map(|error| error.code),
+                Some("wrong_card_count")
+            );
+        }
+        assert_eq!(game.hands[&2].len(), HAND_SIZE);
+    }
+
+    #[test]
+    fn a_pick_2_prompt_takes_two_cards_in_order() {
+        let mut game = started_game(&[1, 2, 3]);
+        // "Tonight's main event: ____ vs. ____."
+        game.prompt = Some(starter_prompt(5));
+        let first = game.hands[&2][4].clone();
+        let second = game.hands[&2][1].clone();
+
+        let one_card = submit(&mut game, 2, &[first.id]);
+        assert_eq!(
+            one_card.err().map(|error| error.code),
+            Some("wrong_card_count")
+        );
+
+        submit(&mut game, 2, &[first.id, second.id]).unwrap();
+        assert_eq!(game.submissions[&2], [first, second]);
     }
 
     #[test]
@@ -348,6 +401,7 @@ mod tests {
     #[test]
     fn cards_you_dont_hold_are_refused() {
         let mut game = started_game(&[1, 2, 3]);
+        game.prompt = Some(starter_prompt(5));
         let mine = game.hands[&2][0].id;
         let kims = game.hands[&3][0].id;
 
@@ -364,6 +418,7 @@ mod tests {
     #[test]
     fn the_same_card_twice_is_refused() {
         let mut game = started_game(&[1, 2, 3]);
+        game.prompt = Some(starter_prompt(5));
         let card = game.hands[&2][0].id;
 
         let result = submit(&mut game, 2, &[card, card]);
