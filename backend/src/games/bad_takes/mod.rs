@@ -1,7 +1,7 @@
 // Bad Takes: an adult fill-in-the-blank card game
 pub mod deck;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use rand::Rng;
 use serde::Deserialize;
@@ -118,13 +118,27 @@ impl BadTakes {
             });
         }
 
-        // Take the cards out of the hand, in the order they were picked
+        // Check every card before taking any, so a refused submission leaves the hand as it was
         let hand = self.hands.entry(player).or_default();
+        let all_held = card_ids
+            .iter()
+            .all(|&id| hand.iter().any(|card| card.id == id));
+        let all_different = card_ids.iter().collect::<HashSet<_>>().len() == card_ids.len();
+        if !all_held || !all_different {
+            return Err(GameError {
+                code: "card_not_in_hand",
+                message: "You don't have that card",
+            });
+        }
+
+        // Take the cards out of the hand, in the order they were picked
         let mut cards = Vec::new();
         for id in card_ids {
-            if let Some(index) = hand.iter().position(|card| card.id == id) {
-                cards.push(hand.remove(index));
-            }
+            let index = hand
+                .iter()
+                .position(|card| card.id == id)
+                .expect("checked above");
+            cards.push(hand.remove(index));
         }
         self.submissions.insert(player, cards);
 
@@ -329,6 +343,35 @@ mod tests {
         );
         assert_eq!(game.hands[&1].len(), HAND_SIZE, "the judge keeps the card");
         assert!(game.submissions.is_empty());
+    }
+
+    #[test]
+    fn cards_you_dont_hold_are_refused() {
+        let mut game = started_game(&[1, 2, 3]);
+        let mine = game.hands[&2][0].id;
+        let kims = game.hands[&3][0].id;
+
+        let result = submit(&mut game, 2, &[mine, kims]);
+        assert_eq!(
+            result.err().map(|error| error.code),
+            Some("card_not_in_hand")
+        );
+        assert_eq!(game.hands[&2].len(), HAND_SIZE, "nothing left the hand");
+        assert_eq!(game.hands[&3].len(), HAND_SIZE, "Kim still has her card");
+        assert!(game.submissions.is_empty());
+    }
+
+    #[test]
+    fn the_same_card_twice_is_refused() {
+        let mut game = started_game(&[1, 2, 3]);
+        let card = game.hands[&2][0].id;
+
+        let result = submit(&mut game, 2, &[card, card]);
+        assert_eq!(
+            result.err().map(|error| error.code),
+            Some("card_not_in_hand")
+        );
+        assert_eq!(game.hands[&2].len(), HAND_SIZE);
     }
 
     #[test]
