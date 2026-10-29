@@ -1,5 +1,6 @@
 // Bad Takes: an adult fill-in-the-blank card game
 pub mod deck;
+pub mod state;
 
 use std::collections::{HashMap, HashSet};
 
@@ -8,6 +9,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use deck::{AnswerCard, CardId, Deck, PromptCard};
+use state::Phase;
 
 use super::{Game, GameCtx, GameError, GameInfo, PlayerId, TimerId};
 use crate::protocol::RoomSettings;
@@ -62,6 +64,7 @@ pub struct BadTakes {
     prompt: Option<PromptCard>,
     // The cards each player put down this round, kept secret until the judge reads them
     submissions: HashMap<PlayerId, Vec<AnswerCard>>,
+    phase: Phase,
 }
 
 impl BadTakes {
@@ -82,12 +85,14 @@ impl BadTakes {
             judge: None,
             prompt: None,
             submissions: HashMap::new(),
+            phase: Phase::Submitting,
         }
     }
 
     // A new judge reads out a new prompt
     fn start_round(&mut self, ctx: &mut GameCtx) {
         self.round += 1;
+        self.phase = Phase::Submitting;
         self.judge = self.players.first().copied();
         self.prompt = self.prompts.draw();
         ctx.broadcast(json!({
@@ -104,6 +109,12 @@ impl BadTakes {
         card_ids: Vec<CardId>,
         ctx: &mut GameCtx,
     ) -> Result<(), GameError> {
+        if self.phase != Phase::Submitting {
+            return Err(GameError {
+                code: "not_submitting",
+                message: "Cards can't be played right now",
+            });
+        }
         // The judge picks the winner, so they can't play a card of their own
         if self.judge == Some(player) {
             return Err(GameError {
@@ -160,7 +171,24 @@ impl BadTakes {
 
         // Everyone sees who has played, nobody sees what
         ctx.broadcast(json!({ "event": "submitted", "player": player }));
+        self.judge_when_everyone_submitted(ctx);
         Ok(())
+    }
+
+    // Once every player but the judge has played, the judge reads the cards
+    fn judge_when_everyone_submitted(&mut self, ctx: &mut GameCtx) {
+        if self.phase != Phase::Submitting || self.submissions.is_empty() {
+            return;
+        }
+        let everyone_played = self
+            .players
+            .iter()
+            .filter(|&&player| Some(player) != self.judge)
+            .all(|player| self.submissions.contains_key(player));
+        if everyone_played {
+            self.phase = Phase::Judging;
+            ctx.broadcast(json!({ "event": "judging_started" }));
+        }
     }
 
     // Who has played this round, in a fixed order
@@ -212,15 +240,20 @@ impl Game for BadTakes {
 
     fn player_joined(&mut self, _player: PlayerId, _ctx: &mut GameCtx) {}
 
-    fn player_left(&mut self, player: PlayerId, _ctx: &mut GameCtx) {
+    fn player_left(&mut self, player: PlayerId, ctx: &mut GameCtx) {
         self.players.retain(|&id| id != player);
         self.hands.remove(&player);
+        // They aren't here to win the point
+        self.submissions.remove(&player);
+        // The others no longer wait for them
+        self.judge_when_everyone_submitted(ctx);
     }
 
     fn view_for(&self, player: PlayerId) -> Value {
         json!({
             "points_to_win": self.points_to_win,
             "round": self.round,
+            "phase": self.phase,
             "judge": self.judge,
             "prompt": self.prompt,
             "hand": self.hands.get(&player),
@@ -434,6 +467,73 @@ mod tests {
             Some("card_not_in_hand")
         );
         assert_eq!(game.hands[&2].len(), HAND_SIZE);
+    }
+
+    // Everyone but the judge plays their first card
+    fn everyone_submits(game: &mut BadTakes, ctx: &mut GameCtx) {
+        let players: Vec<PlayerId> = game.players.clone();
+        for player in players {
+            if Some(player) != game.judge {
+                let card = game.hands[&player][0].id;
+                game.handle_action(player, json!({ "kind": "submit", "cards": [card] }), ctx)
+                    .unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn judging_starts_when_everyone_has_played() {
+        let mut game = started_game(&[1, 2, 3]);
+        let card = game.hands[&2][0].id;
+        submit(&mut game, 2, &[card]).unwrap();
+        assert_eq!(game.phase, Phase::Submitting, "Kim hasn't played yet");
+
+        let card = game.hands[&3][0].id;
+        let ctx = submit(&mut game, 3, &[card]).unwrap();
+        assert_eq!(game.phase, Phase::Judging);
+        assert_eq!(
+            ctx.outgoing.last().map(|outgoing| &outgoing.message),
+            Some(&json!({ "event": "judging_started" }))
+        );
+        assert_eq!(game.view_for(1)["phase"], "judging");
+    }
+
+    #[test]
+    fn no_cards_once_judging_has_started() {
+        let mut game = started_game(&[1, 2, 3, 4]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+        assert_eq!(game.phase, Phase::Judging);
+
+        // Nobody can play now, not even someone who somehow still could
+        game.submissions.remove(&4);
+        let card = game.hands[&4][0].id;
+        let result = submit(&mut game, 4, &[card]);
+        assert_eq!(result.err().map(|error| error.code), Some("not_submitting"));
+    }
+
+    #[test]
+    fn a_leaver_no_longer_holds_up_judging() {
+        let mut game = started_game(&[1, 2, 3, 4]);
+        let card = game.hands[&2][0].id;
+        submit(&mut game, 2, &[card]).unwrap();
+        let card = game.hands[&3][0].id;
+        submit(&mut game, 3, &[card]).unwrap();
+        assert_eq!(game.phase, Phase::Submitting, "Lee hasn't played");
+
+        let mut ctx = GameCtx::default();
+        game.player_left(4, &mut ctx);
+        assert_eq!(game.phase, Phase::Judging);
+    }
+
+    #[test]
+    fn a_leaver_takes_their_cards_with_them() {
+        let mut game = started_game(&[1, 2, 3, 4]);
+        let card = game.hands[&2][0].id;
+        submit(&mut game, 2, &[card]).unwrap();
+
+        game.player_left(2, &mut GameCtx::default());
+        assert!(!game.submissions.contains_key(&2));
+        assert_eq!(game.phase, Phase::Submitting);
     }
 
     #[test]
