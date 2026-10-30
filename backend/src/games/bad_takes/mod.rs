@@ -4,7 +4,8 @@ pub mod state;
 
 use std::collections::{HashMap, HashSet};
 
-use rand::Rng;
+use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -41,7 +42,7 @@ fn create(settings: &RoomSettings) -> Box<dyn Game> {
         settings.points_to_win,
         cards.prompts.clone(),
         cards.answers.clone(),
-        &mut rand::rng(),
+        rand::make_rng(),
     ))
 }
 
@@ -64,7 +65,10 @@ pub struct BadTakes {
     prompt: Option<PromptCard>,
     // The cards each player put down this round, kept secret until the judge reads them
     submissions: HashMap<PlayerId, Vec<AnswerCard>>,
+    // The order the judge reads the cards in, never sent to anyone
+    reading_order: Vec<PlayerId>,
     phase: Phase,
+    rng: StdRng,
 }
 
 impl BadTakes {
@@ -73,19 +77,21 @@ impl BadTakes {
         points_to_win: u8,
         prompts: Vec<PromptCard>,
         answers: Vec<AnswerCard>,
-        rng: &mut impl Rng,
+        mut rng: StdRng,
     ) -> BadTakes {
         BadTakes {
             points_to_win,
             players: Vec::new(),
-            prompts: Deck::shuffled(prompts, rng),
-            answers: Deck::shuffled(answers, rng),
+            prompts: Deck::shuffled(prompts, &mut rng),
+            answers: Deck::shuffled(answers, &mut rng),
             hands: HashMap::new(),
             round: 0,
             judge: None,
             prompt: None,
             submissions: HashMap::new(),
+            reading_order: Vec::new(),
             phase: Phase::Submitting,
+            rng,
         }
     }
 
@@ -93,6 +99,7 @@ impl BadTakes {
     fn start_round(&mut self, ctx: &mut GameCtx) {
         self.round += 1;
         self.phase = Phase::Submitting;
+        self.reading_order.clear();
         self.judge = self.players.first().copied();
         self.prompt = self.prompts.draw();
         ctx.broadcast(json!({
@@ -186,6 +193,9 @@ impl BadTakes {
             .filter(|&&player| Some(player) != self.judge)
             .all(|player| self.submissions.contains_key(player));
         if everyone_played {
+            // Shuffled, so the judge can't tell whose cards came in first
+            self.reading_order = self.submitted_players();
+            self.reading_order.shuffle(&mut self.rng);
             self.phase = Phase::Judging;
             ctx.broadcast(json!({ "event": "judging_started" }));
         }
@@ -196,6 +206,14 @@ impl BadTakes {
         let mut players: Vec<PlayerId> = self.submissions.keys().copied().collect();
         players.sort();
         players
+    }
+
+    // The played cards in reading order, with nothing to say whose they are
+    fn cards_to_judge(&self) -> Vec<&Vec<AnswerCard>> {
+        self.reading_order
+            .iter()
+            .filter_map(|player| self.submissions.get(player))
+            .collect()
     }
 
     // Fill a player's hand up to 7 cards
@@ -245,6 +263,7 @@ impl Game for BadTakes {
         self.hands.remove(&player);
         // They aren't here to win the point
         self.submissions.remove(&player);
+        self.reading_order.retain(|&id| id != player);
         // The others no longer wait for them
         self.judge_when_everyone_submitted(ctx);
     }
@@ -259,6 +278,7 @@ impl Game for BadTakes {
             "hand": self.hands.get(&player),
             "submitted": self.submitted_players(),
             "my_submission": self.submissions.get(&player),
+            "cards_to_judge": self.cards_to_judge(),
         })
     }
 
@@ -272,7 +292,6 @@ mod tests {
     use super::*;
     use crate::games::{GAMES, Recipient, find_game};
     use rand::SeedableRng;
-    use rand::rngs::StdRng;
     use std::collections::HashSet;
 
     // A game with the starter deck, dealt the same way every run
@@ -282,7 +301,7 @@ mod tests {
             7,
             cards.prompts.clone(),
             cards.answers.clone(),
-            &mut StdRng::seed_from_u64(1),
+            StdRng::seed_from_u64(1),
         );
         game.start(players, &mut GameCtx::default());
         // A known pick 1 prompt, so tests don't depend on what the shuffle revealed
@@ -355,7 +374,7 @@ mod tests {
             7,
             cards.prompts.clone(),
             cards.answers.clone(),
-            &mut StdRng::seed_from_u64(1),
+            StdRng::seed_from_u64(1),
         );
         let mut ctx = GameCtx::default();
         game.start(&[4, 2, 9], &mut ctx);
@@ -534,6 +553,59 @@ mod tests {
         game.player_left(2, &mut GameCtx::default());
         assert!(!game.submissions.contains_key(&2));
         assert_eq!(game.phase, Phase::Submitting);
+    }
+
+    #[test]
+    fn nothing_to_judge_until_everyone_has_played() {
+        let mut game = started_game(&[1, 2, 3]);
+        let card = game.hands[&2][0].id;
+        submit(&mut game, 2, &[card]).unwrap();
+        assert_eq!(game.view_for(1)["cards_to_judge"], json!([]));
+    }
+
+    #[test]
+    fn everyone_sees_the_cards_but_not_whose_they_are() {
+        let mut game = started_game(&[1, 2, 3, 4]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+
+        let in_reading_order: Vec<_> = game
+            .reading_order
+            .iter()
+            .map(|player| &game.submissions[player])
+            .collect();
+        for player in [1, 2, 3, 4] {
+            let view = game.view_for(player);
+            assert_eq!(view["cards_to_judge"], json!(in_reading_order));
+        }
+        // Each entry is just the cards, with no player attached
+        let entry = &game.view_for(1)["cards_to_judge"][0];
+        assert_eq!(entry, &json!(game.submissions[&game.reading_order[0]]));
+    }
+
+    #[test]
+    fn the_reading_order_is_shuffled() {
+        let players: Vec<PlayerId> = (1..=8).collect();
+        let mut game = started_game(&players);
+        everyone_submits(&mut game, &mut GameCtx::default());
+
+        let mut sorted = game.reading_order.clone();
+        sorted.sort();
+        assert_eq!(
+            sorted,
+            (2..=8).collect::<Vec<_>>(),
+            "everyone but the judge"
+        );
+        assert_ne!(game.reading_order, sorted, "not in player order");
+    }
+
+    #[test]
+    fn a_leaver_drops_out_of_the_reading_order() {
+        let mut game = started_game(&[1, 2, 3, 4]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+
+        game.player_left(3, &mut GameCtx::default());
+        assert!(!game.reading_order.contains(&3));
+        assert_eq!(game.cards_to_judge().len(), 2);
     }
 
     #[test]
