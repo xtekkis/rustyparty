@@ -2,7 +2,7 @@
 pub mod deck;
 pub mod state;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -58,6 +58,8 @@ enum Action {
 pub struct BadTakes {
     points_to_win: u8,
     players: Vec<PlayerId>,
+    // Points per player, in player order so every view lists them the same way
+    scores: BTreeMap<PlayerId, u8>,
     prompts: Deck<PromptCard>,
     answers: Deck<AnswerCard>,
     // Each player's cards, only ever shown to that player
@@ -86,6 +88,7 @@ impl BadTakes {
         BadTakes {
             points_to_win,
             players: Vec::new(),
+            scores: BTreeMap::new(),
             prompts: Deck::shuffled(prompts, &mut rng),
             answers: Deck::shuffled(answers, &mut rng),
             hands: HashMap::new(),
@@ -207,7 +210,7 @@ impl BadTakes {
         }
     }
 
-    fn pick(&mut self, player: PlayerId, card: CardId) -> Result<(), GameError> {
+    fn pick(&mut self, player: PlayerId, card: CardId, ctx: &mut GameCtx) -> Result<(), GameError> {
         if self.phase != Phase::Judging {
             return Err(GameError {
                 code: "not_judging",
@@ -236,6 +239,16 @@ impl BadTakes {
 
         self.winner = Some(winner);
         self.phase = Phase::RoundOver;
+        let points = self.scores.entry(winner).or_default();
+        *points += 1;
+
+        // Only the winning answer gets a name, the rest stay anonymous
+        ctx.broadcast(json!({
+            "event": "winner_revealed",
+            "winner": winner,
+            "cards": self.submissions.get(&winner),
+            "points": *points,
+        }));
         Ok(())
     }
 
@@ -271,6 +284,7 @@ impl Game for BadTakes {
         self.players = players.to_vec();
         for &player in players {
             self.deal_to(player);
+            self.scores.insert(player, 0);
         }
         self.start_round(ctx);
     }
@@ -289,7 +303,7 @@ impl Game for BadTakes {
         };
         match action {
             Action::Submit { cards } => self.submit(player, cards, ctx),
-            Action::Pick { card } => self.pick(player, card),
+            Action::Pick { card } => self.pick(player, card, ctx),
         }
     }
 
@@ -300,6 +314,7 @@ impl Game for BadTakes {
     fn player_left(&mut self, player: PlayerId, ctx: &mut GameCtx) {
         self.players.retain(|&id| id != player);
         self.hands.remove(&player);
+        self.scores.remove(&player);
         // They aren't here to win the point
         self.submissions.remove(&player);
         self.reading_order.retain(|&id| id != player);
@@ -310,6 +325,7 @@ impl Game for BadTakes {
     fn view_for(&self, player: PlayerId) -> Value {
         json!({
             "points_to_win": self.points_to_win,
+            "scores": self.scores,
             "round": self.round,
             "phase": self.phase,
             "judge": self.judge,
@@ -318,6 +334,7 @@ impl Game for BadTakes {
             "submitted": self.submitted_players(),
             "my_submission": self.submissions.get(&player),
             "cards_to_judge": self.cards_to_judge(),
+            "winner": self.winner,
         })
     }
 
@@ -647,12 +664,10 @@ mod tests {
         assert_eq!(game.cards_to_judge().len(), 2);
     }
 
-    fn pick(game: &mut BadTakes, player: PlayerId, card: CardId) -> Result<(), GameError> {
-        game.handle_action(
-            player,
-            json!({ "kind": "pick", "card": card }),
-            &mut GameCtx::default(),
-        )
+    fn pick(game: &mut BadTakes, player: PlayerId, card: CardId) -> Result<GameCtx, GameError> {
+        let mut ctx = GameCtx::default();
+        game.handle_action(player, json!({ "kind": "pick", "card": card }), &mut ctx)?;
+        Ok(ctx)
     }
 
     #[test]
@@ -670,6 +685,61 @@ mod tests {
         let again = pick(&mut game, 1, sams_card);
         assert_eq!(again.err().map(|error| error.code), Some("not_judging"));
         assert_eq!(game.winner, Some(3));
+    }
+
+    #[test]
+    fn everyone_starts_on_zero_points() {
+        let game = started_game(&[1, 2, 3]);
+        assert_eq!(
+            game.view_for(2)["scores"],
+            json!({ "1": 0, "2": 0, "3": 0 })
+        );
+    }
+
+    #[test]
+    fn the_winner_gets_a_point_and_everyone_is_told() {
+        let mut game = started_game(&[1, 2, 3, 4]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+        assert_eq!(
+            game.view_for(2)["winner"],
+            json!(null),
+            "not before the pick"
+        );
+
+        let kims_cards = game.submissions[&3].clone();
+        let ctx = pick(&mut game, 1, kims_cards[0].id).unwrap();
+
+        assert_eq!(ctx.outgoing.len(), 1);
+        assert_eq!(ctx.outgoing[0].to, Recipient::Everyone);
+        assert_eq!(
+            ctx.outgoing[0].message,
+            json!({ "event": "winner_revealed", "winner": 3, "cards": kims_cards, "points": 1 })
+        );
+        let view = game.view_for(2);
+        assert_eq!(view["scores"], json!({ "1": 0, "2": 0, "3": 1, "4": 0 }));
+        assert_eq!(view["winner"], 3);
+    }
+
+    #[test]
+    fn points_add_up_across_rounds() {
+        let mut game = started_game(&[1, 2, 3]);
+        game.scores.insert(2, 4);
+        everyone_submits(&mut game, &mut GameCtx::default());
+
+        let sams_card = game.submissions[&2][0].id;
+        let ctx = pick(&mut game, 1, sams_card).unwrap();
+        assert_eq!(game.scores[&2], 5);
+        assert_eq!(ctx.outgoing[0].message["points"], 5);
+    }
+
+    #[test]
+    fn a_leaver_leaves_the_scoreboard() {
+        let mut game = started_game(&[1, 2, 3, 4]);
+        game.player_left(4, &mut GameCtx::default());
+        assert_eq!(
+            game.view_for(1)["scores"],
+            json!({ "1": 0, "2": 0, "3": 0 })
+        );
     }
 
     #[test]
