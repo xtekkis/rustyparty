@@ -62,6 +62,8 @@ pub struct BadTakes {
     scores: BTreeMap<PlayerId, u8>,
     prompts: Deck<PromptCard>,
     answers: Deck<AnswerCard>,
+    // Played cards, out of the game until the answer deck runs out
+    discard: Vec<AnswerCard>,
     // Each player's cards, only ever shown to that player
     hands: HashMap<PlayerId, Vec<AnswerCard>>,
     round: u32,
@@ -91,6 +93,7 @@ impl BadTakes {
             scores: BTreeMap::new(),
             prompts: Deck::shuffled(prompts, &mut rng),
             answers: Deck::shuffled(answers, &mut rng),
+            discard: Vec::new(),
             hands: HashMap::new(),
             round: 0,
             judge: None,
@@ -107,6 +110,9 @@ impl BadTakes {
     fn start_round(&mut self, ctx: &mut GameCtx) {
         self.round += 1;
         self.phase = Phase::Submitting;
+        // Last round's cards stay on the table until now, so everyone can see the reveal
+        self.discard
+            .extend(self.submissions.drain().flat_map(|(_, cards)| cards));
         self.reading_order.clear();
         self.winner = None;
         self.judge = self.players.first().copied();
@@ -313,10 +319,15 @@ impl Game for BadTakes {
 
     fn player_left(&mut self, player: PlayerId, ctx: &mut GameCtx) {
         self.players.retain(|&id| id != player);
-        self.hands.remove(&player);
         self.scores.remove(&player);
+        // Their cards go to the discard pile, so the deck doesn't shrink
+        if let Some(hand) = self.hands.remove(&player) {
+            self.discard.extend(hand);
+        }
         // They aren't here to win the point
-        self.submissions.remove(&player);
+        if let Some(cards) = self.submissions.remove(&player) {
+            self.discard.extend(cards);
+        }
         self.reading_order.retain(|&id| id != player);
         // The others no longer wait for them
         self.judge_when_everyone_submitted(ctx);
@@ -740,6 +751,61 @@ mod tests {
             game.view_for(1)["scores"],
             json!({ "1": 0, "2": 0, "3": 0 })
         );
+    }
+
+    // Every answer card is somewhere: in the deck, a hand, on the table or discarded
+    fn cards_in_play(game: &BadTakes) -> usize {
+        game.answers.len()
+            + game.hands.values().map(Vec::len).sum::<usize>()
+            + game.submissions.values().map(Vec::len).sum::<usize>()
+            + game.discard.len()
+    }
+
+    #[test]
+    fn played_cards_stay_on_the_table_for_the_reveal() {
+        let mut game = started_game(&[1, 2, 3]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+        let sams_card = game.submissions[&2][0].id;
+        pick(&mut game, 1, sams_card).unwrap();
+
+        assert!(game.discard.is_empty());
+        assert_eq!(game.cards_to_judge().len(), 2);
+    }
+
+    #[test]
+    fn played_cards_are_discarded_when_the_next_round_starts() {
+        let mut game = started_game(&[1, 2, 3]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+        let played: HashSet<CardId> = game
+            .submissions
+            .values()
+            .flatten()
+            .map(|card| card.id)
+            .collect();
+        let sams_card = game.submissions[&2][0].id;
+        pick(&mut game, 1, sams_card).unwrap();
+
+        game.start_round(&mut GameCtx::default());
+        let discarded: HashSet<CardId> = game.discard.iter().map(|card| card.id).collect();
+        assert_eq!(discarded, played);
+        assert!(game.submissions.is_empty(), "everyone can play again");
+        assert!(game.cards_to_judge().is_empty());
+        assert_eq!(cards_in_play(&game), 140);
+    }
+
+    #[test]
+    fn a_leavers_cards_are_discarded() {
+        let mut game = started_game(&[1, 2, 3, 4]);
+        let card = game.hands[&2][0].id;
+        submit(&mut game, 2, &[card]).unwrap();
+
+        game.player_left(2, &mut GameCtx::default());
+        assert_eq!(
+            game.discard.len(),
+            HAND_SIZE,
+            "the played card and the rest of the hand"
+        );
+        assert_eq!(cards_in_play(&game), 140);
     }
 
     #[test]
