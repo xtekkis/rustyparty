@@ -46,11 +46,13 @@ fn create(settings: &RoomSettings) -> Box<dyn Game> {
     ))
 }
 
-// What players can do, sent as {"kind": "submit", ...}
+// What players can do, sent as {"kind": "submit", ...} or {"kind": "pick", ...}
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum Action {
     Submit { cards: Vec<CardId> },
+    // The judge points at any card of their favorite answer
+    Pick { card: CardId },
 }
 
 pub struct BadTakes {
@@ -67,6 +69,8 @@ pub struct BadTakes {
     submissions: HashMap<PlayerId, Vec<AnswerCard>>,
     // The order the judge reads the cards in, never sent to anyone
     reading_order: Vec<PlayerId>,
+    // Whose cards the judge picked, kept secret until the reveal
+    winner: Option<PlayerId>,
     phase: Phase,
     rng: StdRng,
 }
@@ -90,6 +94,7 @@ impl BadTakes {
             prompt: None,
             submissions: HashMap::new(),
             reading_order: Vec::new(),
+            winner: None,
             phase: Phase::Submitting,
             rng,
         }
@@ -100,6 +105,7 @@ impl BadTakes {
         self.round += 1;
         self.phase = Phase::Submitting;
         self.reading_order.clear();
+        self.winner = None;
         self.judge = self.players.first().copied();
         self.prompt = self.prompts.draw();
         ctx.broadcast(json!({
@@ -201,6 +207,38 @@ impl BadTakes {
         }
     }
 
+    fn pick(&mut self, player: PlayerId, card: CardId) -> Result<(), GameError> {
+        if self.phase != Phase::Judging {
+            return Err(GameError {
+                code: "not_judging",
+                message: "There's nothing to pick right now",
+            });
+        }
+        if self.judge != Some(player) {
+            return Err(GameError {
+                code: "not_the_judge",
+                message: "Only the judge picks the winner",
+            });
+        }
+
+        // Any card of an answer picks the whole answer
+        let owner = self.reading_order.iter().copied().find(|owner| {
+            self.submissions
+                .get(owner)
+                .is_some_and(|cards| cards.iter().any(|played| played.id == card))
+        });
+        let Some(winner) = owner else {
+            return Err(GameError {
+                code: "not_a_choice",
+                message: "That card isn't one of the answers",
+            });
+        };
+
+        self.winner = Some(winner);
+        self.phase = Phase::RoundOver;
+        Ok(())
+    }
+
     // Who has played this round, in a fixed order
     fn submitted_players(&self) -> Vec<PlayerId> {
         let mut players: Vec<PlayerId> = self.submissions.keys().copied().collect();
@@ -251,6 +289,7 @@ impl Game for BadTakes {
         };
         match action {
             Action::Submit { cards } => self.submit(player, cards, ctx),
+            Action::Pick { card } => self.pick(player, card),
         }
     }
 
@@ -606,6 +645,81 @@ mod tests {
         game.player_left(3, &mut GameCtx::default());
         assert!(!game.reading_order.contains(&3));
         assert_eq!(game.cards_to_judge().len(), 2);
+    }
+
+    fn pick(game: &mut BadTakes, player: PlayerId, card: CardId) -> Result<(), GameError> {
+        game.handle_action(
+            player,
+            json!({ "kind": "pick", "card": card }),
+            &mut GameCtx::default(),
+        )
+    }
+
+    #[test]
+    fn the_judge_picks_a_winner() {
+        let mut game = started_game(&[1, 2, 3, 4]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+
+        let kims_card = game.submissions[&3][0].id;
+        pick(&mut game, 1, kims_card).unwrap();
+        assert_eq!(game.winner, Some(3));
+        assert_eq!(game.phase, Phase::RoundOver);
+
+        // One pick per round
+        let sams_card = game.submissions[&2][0].id;
+        let again = pick(&mut game, 1, sams_card);
+        assert_eq!(again.err().map(|error| error.code), Some("not_judging"));
+        assert_eq!(game.winner, Some(3));
+    }
+
+    #[test]
+    fn any_card_of_a_pick_2_answer_picks_it() {
+        let mut game = started_game(&[1, 2, 3]);
+        game.prompt = Some(starter_prompt(5));
+        for player in [2, 3] {
+            let cards = [game.hands[&player][0].id, game.hands[&player][1].id];
+            submit(&mut game, player, &cards).unwrap();
+        }
+
+        let sams_second_card = game.submissions[&2][1].id;
+        pick(&mut game, 1, sams_second_card).unwrap();
+        assert_eq!(game.winner, Some(2));
+    }
+
+    #[test]
+    fn only_the_judge_can_pick() {
+        let mut game = started_game(&[1, 2, 3]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+
+        let own_card = game.submissions[&2][0].id;
+        let result = pick(&mut game, 2, own_card);
+        assert_eq!(result.err().map(|error| error.code), Some("not_the_judge"));
+        assert_eq!(game.winner, None);
+        assert_eq!(game.phase, Phase::Judging);
+    }
+
+    #[test]
+    fn no_picking_before_everyone_has_played() {
+        let mut game = started_game(&[1, 2, 3]);
+        let card = game.hands[&2][0].id;
+        submit(&mut game, 2, &[card]).unwrap();
+
+        let result = pick(&mut game, 1, card);
+        assert_eq!(result.err().map(|error| error.code), Some("not_judging"));
+        assert_eq!(game.winner, None);
+    }
+
+    #[test]
+    fn the_judge_can_only_pick_a_played_card() {
+        let mut game = started_game(&[1, 2, 3]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+
+        // A card still in Sam's hand, and one from the judge's own hand
+        for card in [game.hands[&2][0].id, game.hands[&1][0].id] {
+            let result = pick(&mut game, 1, card);
+            assert_eq!(result.err().map(|error| error.code), Some("not_a_choice"));
+        }
+        assert_eq!(game.winner, None);
     }
 
     #[test]
