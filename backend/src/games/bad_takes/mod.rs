@@ -111,13 +111,16 @@ impl BadTakes {
         }
     }
 
-    // A new judge reads out a new prompt
+    // Everyone has 7 cards again, then a new judge reads out a new prompt
     fn start_round(&mut self, ctx: &mut GameCtx) {
         self.round += 1;
         self.phase = Phase::Submitting;
         // Last round's cards stay on the table until now, so everyone can see the reveal
         self.discard
             .extend(self.submissions.drain().flat_map(|(_, cards)| cards));
+        for player in self.players.clone() {
+            self.deal_to(player);
+        }
         self.reading_order.clear();
         self.winner = None;
         self.judge = self.players.first().copied();
@@ -296,7 +299,6 @@ impl Game for BadTakes {
     fn start(&mut self, players: &[PlayerId], ctx: &mut GameCtx) {
         self.players = players.to_vec();
         for &player in players {
-            self.deal_to(player);
             self.scores.insert(player, 0);
         }
         self.start_round(ctx);
@@ -806,6 +808,44 @@ mod tests {
 
         assert_eq!(game.round, 1, "the round is still being played");
         assert!(ctx.outgoing.is_empty());
+    }
+
+    // The judge picks the first answer they read, then the reveal runs out
+    fn finish_round(game: &mut BadTakes) {
+        let first = game.reading_order[0];
+        let card = game.submissions[&first][0].id;
+        let judge = game.judge.expect("a round has a judge");
+        pick(game, judge, card).unwrap();
+        game.handle_timer(NEXT_ROUND_TIMER, &mut GameCtx::default());
+    }
+
+    #[test]
+    fn hands_are_refilled_when_the_next_round_starts() {
+        let mut game = started_game(&[1, 2, 3]);
+        // A pick 2 prompt, so Sam and Kim each play two cards
+        game.prompt = Some(starter_prompt(5));
+        for player in [2, 3] {
+            let cards = [game.hands[&player][0].id, game.hands[&player][1].id];
+            submit(&mut game, player, &cards).unwrap();
+        }
+        finish_round(&mut game);
+
+        for player in [1, 2, 3] {
+            assert_eq!(game.hands[&player].len(), HAND_SIZE);
+        }
+        assert_eq!(game.answers.len(), 140 - 3 * HAND_SIZE - 4);
+        assert_eq!(cards_in_play(&game), 140);
+    }
+
+    #[test]
+    fn played_cards_are_not_dealt_again() {
+        let mut game = started_game(&[1, 2, 3]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+        finish_round(&mut game);
+
+        for card in &game.discard {
+            assert!(game.hands.values().flatten().all(|held| held != card));
+        }
     }
 
     // Every answer card is somewhere: in the deck, a hand, on the table or discarded
