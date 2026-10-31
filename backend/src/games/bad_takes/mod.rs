@@ -264,19 +264,34 @@ impl BadTakes {
         };
 
         self.winner = Some(winner);
-        self.phase = Phase::RoundOver;
         let points = self.scores.entry(winner).or_default();
         *points += 1;
+        let points = *points;
+        // First to the room's points to win takes the game
+        let game_won = points >= self.points_to_win;
+        self.phase = if game_won {
+            Phase::GameOver
+        } else {
+            Phase::RoundOver
+        };
 
         // Only the winning answer gets a name, the rest stay anonymous
         ctx.broadcast(json!({
             "event": "winner_revealed",
             "winner": winner,
             "cards": self.submissions.get(&winner),
-            "points": *points,
-            "next_round_in": REVEAL_DURATION.as_secs(),
+            "points": points,
+            "next_round_in": (!game_won).then_some(REVEAL_DURATION.as_secs()),
         }));
-        ctx.start_timer(NEXT_ROUND_TIMER, REVEAL_DURATION);
+        if game_won {
+            ctx.broadcast(json!({
+                "event": "game_over",
+                "winner": winner,
+                "scores": self.scores,
+            }));
+        } else {
+            ctx.start_timer(NEXT_ROUND_TIMER, REVEAL_DURATION);
+        }
         Ok(())
     }
 
@@ -376,7 +391,7 @@ impl Game for BadTakes {
     }
 
     fn is_finished(&self) -> bool {
-        false
+        self.phase == Phase::GameOver
     }
 }
 
@@ -777,6 +792,57 @@ mod tests {
         let ctx = pick(&mut game, 1, sams_card).unwrap();
         assert_eq!(game.scores[&2], 5);
         assert_eq!(ctx.outgoing[0].message["points"], 5);
+    }
+
+    #[test]
+    fn reaching_the_points_to_win_ends_the_game() {
+        let mut game = started_game(&[1, 2, 3]);
+        game.scores.insert(2, 6);
+        everyone_submits(&mut game, &mut GameCtx::default());
+
+        let sams_card = game.submissions[&2][0].id;
+        let ctx = pick(&mut game, 1, sams_card).unwrap();
+        assert!(game.is_finished());
+        assert_eq!(game.view_for(3)["phase"], "game_over");
+
+        let messages: Vec<&Value> = ctx
+            .outgoing
+            .iter()
+            .map(|outgoing| &outgoing.message)
+            .collect();
+        assert_eq!(messages[0]["event"], "winner_revealed");
+        assert_eq!(messages[0]["next_round_in"], json!(null), "no next round");
+        assert_eq!(
+            messages[1],
+            &json!({ "event": "game_over", "winner": 2, "scores": { "1": 0, "2": 7, "3": 0 } })
+        );
+        assert!(ctx.timers.is_empty());
+    }
+
+    #[test]
+    fn one_point_short_keeps_the_game_going() {
+        let mut game = started_game(&[1, 2, 3]);
+        game.scores.insert(2, 5);
+        everyone_submits(&mut game, &mut GameCtx::default());
+
+        let sams_card = game.submissions[&2][0].id;
+        let ctx = pick(&mut game, 1, sams_card).unwrap();
+        assert!(!game.is_finished());
+        assert_eq!(ctx.outgoing.len(), 1, "no game over");
+        assert_eq!(ctx.timers.len(), 1, "the next round is coming");
+    }
+
+    #[test]
+    fn a_game_to_three_ends_after_three_wins() {
+        let mut game = started_game(&[1, 2, 3]);
+        game.points_to_win = 3;
+        // Whoever is read first wins each round, until someone has 3
+        while !game.is_finished() {
+            everyone_submits(&mut game, &mut GameCtx::default());
+            finish_round(&mut game);
+        }
+        assert_eq!(game.scores.values().max(), Some(&3));
+        assert_eq!(game.scores.values().sum::<u8>(), game.round as u8);
     }
 
     #[test]
