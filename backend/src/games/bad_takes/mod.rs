@@ -123,7 +123,7 @@ impl BadTakes {
         }
         self.reading_order.clear();
         self.winner = None;
-        self.judge = self.players.first().copied();
+        self.judge = self.next_judge();
         self.prompt = self.prompts.draw();
         ctx.broadcast(json!({
             "event": "round_started",
@@ -131,6 +131,18 @@ impl BadTakes {
             "judge": self.judge,
             "prompt": self.prompt,
         }));
+    }
+
+    // The player after the current judge in join order, back to the first after the last
+    fn next_judge(&self) -> Option<PlayerId> {
+        let after_judge = self
+            .judge
+            .and_then(|judge| self.players.iter().position(|&player| player == judge))
+            .map_or(0, |seat| seat + 1);
+        self.players
+            .get(after_judge)
+            .or(self.players.first())
+            .copied()
     }
 
     fn submit(
@@ -569,13 +581,17 @@ mod tests {
         assert_eq!(game.hands[&2].len(), HAND_SIZE);
     }
 
-    // Everyone but the judge plays their first card
+    // Everyone but the judge plays their first cards, as many as the prompt needs
     fn everyone_submits(game: &mut BadTakes, ctx: &mut GameCtx) {
+        let gaps = usize::from(game.prompt.as_ref().expect("a prompt is out").pick);
         let players: Vec<PlayerId> = game.players.clone();
         for player in players {
             if Some(player) != game.judge {
-                let card = game.hands[&player][0].id;
-                game.handle_action(player, json!({ "kind": "submit", "cards": [card] }), ctx)
+                let cards: Vec<CardId> = game.hands[&player][..gaps]
+                    .iter()
+                    .map(|card| card.id)
+                    .collect();
+                game.handle_action(player, json!({ "kind": "submit", "cards": cards }), ctx)
                     .unwrap();
             }
         }
@@ -817,6 +833,40 @@ mod tests {
         let judge = game.judge.expect("a round has a judge");
         pick(game, judge, card).unwrap();
         game.handle_timer(NEXT_ROUND_TIMER, &mut GameCtx::default());
+    }
+
+    #[test]
+    fn the_judge_rotates_in_join_order() {
+        let mut game = started_game(&[4, 2, 9]);
+        let mut judges = vec![game.judge];
+        for _ in 0..3 {
+            everyone_submits(&mut game, &mut GameCtx::default());
+            finish_round(&mut game);
+            judges.push(game.judge);
+        }
+        assert_eq!(judges, [Some(4), Some(2), Some(9), Some(4)]);
+    }
+
+    #[test]
+    fn everyone_hears_who_the_new_judge_is() {
+        let mut game = started_game(&[1, 2, 3]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+        let sams_card = game.submissions[&2][0].id;
+        pick(&mut game, 1, sams_card).unwrap();
+
+        let mut ctx = GameCtx::default();
+        game.handle_timer(NEXT_ROUND_TIMER, &mut ctx);
+        assert_eq!(ctx.outgoing[0].message["judge"], 2);
+        assert_eq!(game.view_for(3)["judge"], 2);
+    }
+
+    #[test]
+    fn a_leaver_is_skipped_in_the_rotation() {
+        let mut game = started_game(&[1, 2, 3, 4]);
+        game.player_left(2, &mut GameCtx::default());
+        everyone_submits(&mut game, &mut GameCtx::default());
+        finish_round(&mut game);
+        assert_eq!(game.judge, Some(3));
     }
 
     #[test]
