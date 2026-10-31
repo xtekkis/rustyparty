@@ -3,6 +3,7 @@ pub mod deck;
 pub mod state;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::time::Duration;
 
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -18,6 +19,10 @@ use crate::protocol::RoomSettings;
 pub const HAND_SIZE: usize = 7;
 const MIN_PLAYERS: usize = 3;
 const MAX_PLAYERS: usize = 10;
+
+const NEXT_ROUND_TIMER: TimerId = 1;
+// How long everyone sees the winning answer before the next round
+const REVEAL_DURATION: Duration = Duration::from_secs(8);
 
 // The registry entry, built at startup because the player limit depends on the deck
 pub fn info() -> GameInfo {
@@ -254,7 +259,9 @@ impl BadTakes {
             "winner": winner,
             "cards": self.submissions.get(&winner),
             "points": *points,
+            "next_round_in": REVEAL_DURATION.as_secs(),
         }));
+        ctx.start_timer(NEXT_ROUND_TIMER, REVEAL_DURATION);
         Ok(())
     }
 
@@ -313,7 +320,12 @@ impl Game for BadTakes {
         }
     }
 
-    fn handle_timer(&mut self, _timer: TimerId, _ctx: &mut GameCtx) {}
+    fn handle_timer(&mut self, timer: TimerId, ctx: &mut GameCtx) {
+        // The reveal is over, unless the round already moved on
+        if timer == NEXT_ROUND_TIMER && self.phase == Phase::RoundOver {
+            self.start_round(ctx);
+        }
+    }
 
     fn player_joined(&mut self, _player: PlayerId, _ctx: &mut GameCtx) {}
 
@@ -724,7 +736,13 @@ mod tests {
         assert_eq!(ctx.outgoing[0].to, Recipient::Everyone);
         assert_eq!(
             ctx.outgoing[0].message,
-            json!({ "event": "winner_revealed", "winner": 3, "cards": kims_cards, "points": 1 })
+            json!({
+                "event": "winner_revealed",
+                "winner": 3,
+                "cards": kims_cards,
+                "points": 1,
+                "next_round_in": 8,
+            })
         );
         let view = game.view_for(2);
         assert_eq!(view["scores"], json!({ "1": 0, "2": 0, "3": 1, "4": 0 }));
@@ -751,6 +769,43 @@ mod tests {
             game.view_for(1)["scores"],
             json!({ "1": 0, "2": 0, "3": 0 })
         );
+    }
+
+    #[test]
+    fn the_reveal_lasts_eight_seconds() {
+        let mut game = started_game(&[1, 2, 3]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+        let sams_card = game.submissions[&2][0].id;
+
+        let ctx = pick(&mut game, 1, sams_card).unwrap();
+        assert_eq!(ctx.timers, [(NEXT_ROUND_TIMER, Duration::from_secs(8))]);
+    }
+
+    #[test]
+    fn the_next_round_starts_after_the_reveal() {
+        let mut game = started_game(&[1, 2, 3]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+        let sams_card = game.submissions[&2][0].id;
+        pick(&mut game, 1, sams_card).unwrap();
+
+        let mut ctx = GameCtx::default();
+        game.handle_timer(NEXT_ROUND_TIMER, &mut ctx);
+        assert_eq!(game.round, 2);
+        assert_eq!(game.phase, Phase::Submitting);
+        assert_eq!(game.winner, None);
+        assert_eq!(game.prompts.len(), 45 - 2);
+        assert_eq!(ctx.outgoing[0].message["event"], "round_started");
+        assert_eq!(ctx.outgoing[0].message["round"], 2);
+    }
+
+    #[test]
+    fn a_late_next_round_timer_does_nothing() {
+        let mut game = started_game(&[1, 2, 3]);
+        let mut ctx = GameCtx::default();
+        game.handle_timer(NEXT_ROUND_TIMER, &mut ctx);
+
+        assert_eq!(game.round, 1, "the round is still being played");
+        assert!(ctx.outgoing.is_empty());
     }
 
     // Every answer card is somewhere: in the deck, a hand, on the table or discarded
