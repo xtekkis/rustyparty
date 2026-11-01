@@ -26,7 +26,7 @@ const MIN_PLAYERS_TO_VOTE: usize = 3;
 const VOTE_DURATION: Duration = Duration::from_secs(30);
 
 // How long the final scores stay on screen
-const RESULTS_DURATION: Duration = Duration::from_secs(20);
+const RESULTS_DURATION: Duration = Duration::from_secs(10);
 
 // A room with nobody connected for this long deletes itself
 const EMPTY_ROOM_LIFETIME: Duration = Duration::from_secs(5 * 60);
@@ -770,7 +770,7 @@ mod tests {
         assert!(matches!(room.state, RoomState::Results { number: 1 }));
         let mut got_results = false;
         while let Ok(message) = phones[1].try_recv() {
-            got_results |= matches!(message, ServerMessage::Results { ends_in: 20 });
+            got_results |= matches!(message, ServerMessage::Results { ends_in: 10 });
         }
         assert!(got_results);
 

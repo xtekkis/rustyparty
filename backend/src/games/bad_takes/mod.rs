@@ -20,9 +20,9 @@ pub const HAND_SIZE: usize = 7;
 const MIN_PLAYERS: usize = 3;
 const MAX_PLAYERS: usize = 10;
 
-const NEXT_ROUND_TIMER: TimerId = 1;
-// How long everyone sees the winning answer before the next round
-const REVEAL_DURATION: Duration = Duration::from_secs(8);
+const REVEAL_TIMER: TimerId = 1;
+// The winning card, then the scores going up, before the next round or the final results
+const REVEAL_DURATION: Duration = Duration::from_secs(9);
 
 // The registry entry, built at startup because the player limit depends on the deck
 pub fn info() -> GameInfo {
@@ -267,13 +267,7 @@ impl BadTakes {
         let points = self.scores.entry(winner).or_default();
         *points += 1;
         let points = *points;
-        // First to the room's points to win takes the game
-        let game_won = points >= self.points_to_win;
-        self.phase = if game_won {
-            Phase::GameOver
-        } else {
-            Phase::RoundOver
-        };
+        self.phase = Phase::RoundOver;
 
         // Only the winning answer gets a name, the rest stay anonymous
         ctx.broadcast(json!({
@@ -281,18 +275,19 @@ impl BadTakes {
             "winner": winner,
             "cards": self.submissions.get(&winner),
             "points": points,
-            "next_round_in": (!game_won).then_some(REVEAL_DURATION.as_secs()),
+            "reveal_for": REVEAL_DURATION.as_secs(),
+            "last_round": self.game_winner().is_some(),
         }));
-        if game_won {
-            ctx.broadcast(json!({
-                "event": "game_over",
-                "winner": winner,
-                "scores": self.scores,
-            }));
-        } else {
-            ctx.start_timer(NEXT_ROUND_TIMER, REVEAL_DURATION);
-        }
+        ctx.start_timer(REVEAL_TIMER, REVEAL_DURATION);
         Ok(())
+    }
+
+    // First to the room's points to win takes the game
+    fn game_winner(&self) -> Option<PlayerId> {
+        self.scores
+            .iter()
+            .find(|&(_, &points)| points >= self.points_to_win)
+            .map(|(&player, _)| player)
     }
 
     // Who has played this round, in a fixed order
@@ -351,7 +346,17 @@ impl Game for BadTakes {
 
     fn handle_timer(&mut self, timer: TimerId, ctx: &mut GameCtx) {
         // The reveal is over, unless the round already moved on
-        if timer == NEXT_ROUND_TIMER && self.phase == Phase::RoundOver {
+        if timer != REVEAL_TIMER || self.phase != Phase::RoundOver {
+            return;
+        }
+        if let Some(winner) = self.game_winner() {
+            self.phase = Phase::GameOver;
+            ctx.broadcast(json!({
+                "event": "game_over",
+                "winner": winner,
+                "scores": self.scores,
+            }));
+        } else {
             self.start_round(ctx);
         }
     }
@@ -774,7 +779,8 @@ mod tests {
                 "winner": 3,
                 "cards": kims_cards,
                 "points": 1,
-                "next_round_in": 8,
+                "reveal_for": 9,
+                "last_round": false,
             })
         );
         let view = game.view_for(2);
@@ -802,21 +808,18 @@ mod tests {
 
         let sams_card = game.submissions[&2][0].id;
         let ctx = pick(&mut game, 1, sams_card).unwrap();
+        assert_eq!(ctx.outgoing[0].message["last_round"], true);
+        assert!(!game.is_finished(), "everyone sees the winning card first");
+
+        let mut ctx = GameCtx::default();
+        game.handle_timer(REVEAL_TIMER, &mut ctx);
         assert!(game.is_finished());
         assert_eq!(game.view_for(3)["phase"], "game_over");
-
-        let messages: Vec<&Value> = ctx
-            .outgoing
-            .iter()
-            .map(|outgoing| &outgoing.message)
-            .collect();
-        assert_eq!(messages[0]["event"], "winner_revealed");
-        assert_eq!(messages[0]["next_round_in"], json!(null), "no next round");
+        assert_eq!(game.round, 1, "no next round");
         assert_eq!(
-            messages[1],
-            &json!({ "event": "game_over", "winner": 2, "scores": { "1": 0, "2": 7, "3": 0 } })
+            ctx.outgoing[0].message,
+            json!({ "event": "game_over", "winner": 2, "scores": { "1": 0, "2": 7, "3": 0 } })
         );
-        assert!(ctx.timers.is_empty());
     }
 
     #[test]
@@ -827,9 +830,11 @@ mod tests {
 
         let sams_card = game.submissions[&2][0].id;
         let ctx = pick(&mut game, 1, sams_card).unwrap();
+        assert_eq!(ctx.outgoing[0].message["last_round"], false);
+
+        game.handle_timer(REVEAL_TIMER, &mut GameCtx::default());
         assert!(!game.is_finished());
-        assert_eq!(ctx.outgoing.len(), 1, "no game over");
-        assert_eq!(ctx.timers.len(), 1, "the next round is coming");
+        assert_eq!(game.round, 2);
     }
 
     #[test]
@@ -856,13 +861,13 @@ mod tests {
     }
 
     #[test]
-    fn the_reveal_lasts_eight_seconds() {
+    fn the_reveal_lasts_nine_seconds() {
         let mut game = started_game(&[1, 2, 3]);
         everyone_submits(&mut game, &mut GameCtx::default());
         let sams_card = game.submissions[&2][0].id;
 
         let ctx = pick(&mut game, 1, sams_card).unwrap();
-        assert_eq!(ctx.timers, [(NEXT_ROUND_TIMER, Duration::from_secs(8))]);
+        assert_eq!(ctx.timers, [(REVEAL_TIMER, Duration::from_secs(9))]);
     }
 
     #[test]
@@ -873,7 +878,7 @@ mod tests {
         pick(&mut game, 1, sams_card).unwrap();
 
         let mut ctx = GameCtx::default();
-        game.handle_timer(NEXT_ROUND_TIMER, &mut ctx);
+        game.handle_timer(REVEAL_TIMER, &mut ctx);
         assert_eq!(game.round, 2);
         assert_eq!(game.phase, Phase::Submitting);
         assert_eq!(game.winner, None);
@@ -886,7 +891,7 @@ mod tests {
     fn a_late_next_round_timer_does_nothing() {
         let mut game = started_game(&[1, 2, 3]);
         let mut ctx = GameCtx::default();
-        game.handle_timer(NEXT_ROUND_TIMER, &mut ctx);
+        game.handle_timer(REVEAL_TIMER, &mut ctx);
 
         assert_eq!(game.round, 1, "the round is still being played");
         assert!(ctx.outgoing.is_empty());
@@ -898,7 +903,7 @@ mod tests {
         let card = game.submissions[&first][0].id;
         let judge = game.judge.expect("a round has a judge");
         pick(game, judge, card).unwrap();
-        game.handle_timer(NEXT_ROUND_TIMER, &mut GameCtx::default());
+        game.handle_timer(REVEAL_TIMER, &mut GameCtx::default());
     }
 
     #[test]
@@ -921,7 +926,7 @@ mod tests {
         pick(&mut game, 1, sams_card).unwrap();
 
         let mut ctx = GameCtx::default();
-        game.handle_timer(NEXT_ROUND_TIMER, &mut ctx);
+        game.handle_timer(REVEAL_TIMER, &mut ctx);
         assert_eq!(ctx.outgoing[0].message["judge"], 2);
         assert_eq!(game.view_for(3)["judge"], 2);
     }
