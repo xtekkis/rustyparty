@@ -20,7 +20,16 @@ pub const HAND_SIZE: usize = 7;
 const MIN_PLAYERS: usize = 3;
 const MAX_PLAYERS: usize = 10;
 
-const REVEAL_TIMER: TimerId = 1;
+// What a timer is for. Timers can't be cancelled, so each id also carries its round,
+// and a timer left over from an earlier round is ignored
+#[derive(Clone, Copy)]
+enum Timer {
+    Submit = 1,
+    Reveal = 2,
+}
+
+// How long players have to play their cards
+const SUBMIT_DURATION: Duration = Duration::from_secs(60);
 // The winning card, then the scores going up, before the next round or the final results
 const REVEAL_DURATION: Duration = Duration::from_secs(9);
 
@@ -143,7 +152,13 @@ impl BadTakes {
             "round": self.round,
             "judge": self.judge,
             "prompt": self.prompt,
+            "submit_for": SUBMIT_DURATION.as_secs(),
         }));
+        ctx.start_timer(self.timer_id(Timer::Submit), SUBMIT_DURATION);
+    }
+
+    fn timer_id(&self, timer: Timer) -> TimerId {
+        self.round * 10 + timer as TimerId
     }
 
     // The player after the current judge in join order, back to the first after the last
@@ -241,11 +256,36 @@ impl BadTakes {
             .filter(|&&player| Some(player) != self.judge)
             .all(|player| self.submissions.contains_key(player));
         if everyone_played {
-            // Shuffled, so the judge can't tell whose cards came in first
-            self.reading_order = self.submitted_players();
-            self.reading_order.shuffle(&mut self.rng);
-            self.phase = Phase::Judging;
-            ctx.broadcast(json!({ "event": "judging_started" }));
+            self.start_judging(ctx);
+        }
+    }
+
+    fn start_judging(&mut self, ctx: &mut GameCtx) {
+        // Shuffled, so the judge can't tell whose cards came in first
+        self.reading_order = self.submitted_players();
+        self.reading_order.shuffle(&mut self.rng);
+        self.phase = Phase::Judging;
+        ctx.broadcast(json!({ "event": "judging_started" }));
+    }
+
+    // Whoever hasn't played by now sits this round out
+    fn submit_time_up(&mut self, ctx: &mut GameCtx) {
+        if !self.submissions.is_empty() {
+            self.start_judging(ctx);
+        }
+    }
+
+    // The reveal is over: the game ends, or the next round starts
+    fn reveal_over(&mut self, ctx: &mut GameCtx) {
+        if let Some(winner) = self.game_winner() {
+            self.phase = Phase::GameOver;
+            ctx.broadcast(json!({
+                "event": "game_over",
+                "winner": winner,
+                "scores": self.scores,
+            }));
+        } else {
+            self.start_round(ctx);
         }
     }
 
@@ -291,7 +331,7 @@ impl BadTakes {
             "reveal_for": REVEAL_DURATION.as_secs(),
             "last_round": self.game_winner().is_some(),
         }));
-        ctx.start_timer(REVEAL_TIMER, REVEAL_DURATION);
+        ctx.start_timer(self.timer_id(Timer::Reveal), REVEAL_DURATION);
         Ok(())
     }
 
@@ -358,19 +398,11 @@ impl Game for BadTakes {
     }
 
     fn handle_timer(&mut self, timer: TimerId, ctx: &mut GameCtx) {
-        // The reveal is over, unless the round already moved on
-        if timer != REVEAL_TIMER || self.phase != Phase::RoundOver {
-            return;
-        }
-        if let Some(winner) = self.game_winner() {
-            self.phase = Phase::GameOver;
-            ctx.broadcast(json!({
-                "event": "game_over",
-                "winner": winner,
-                "scores": self.scores,
-            }));
-        } else {
-            self.start_round(ctx);
+        // Each timer only acts if its round is still at the step it was waiting on
+        if timer == self.timer_id(Timer::Submit) && self.phase == Phase::Submitting {
+            self.submit_time_up(ctx);
+        } else if timer == self.timer_id(Timer::Reveal) && self.phase == Phase::RoundOver {
+            self.reveal_over(ctx);
         }
     }
 
@@ -519,7 +551,17 @@ mod tests {
         assert_eq!(ctx.outgoing[0].to, Recipient::Everyone);
         assert_eq!(
             ctx.outgoing[0].message,
-            json!({ "event": "round_started", "round": 1, "judge": 4, "prompt": prompt })
+            json!({
+                "event": "round_started",
+                "round": 1,
+                "judge": 4,
+                "prompt": prompt,
+                "submit_for": 60,
+            })
+        );
+        assert_eq!(
+            ctx.timers,
+            [(game.timer_id(Timer::Submit), Duration::from_secs(60))]
         );
     }
 
@@ -829,7 +871,7 @@ mod tests {
         assert!(!game.is_finished(), "everyone sees the winning card first");
 
         let mut ctx = GameCtx::default();
-        game.handle_timer(REVEAL_TIMER, &mut ctx);
+        game.handle_timer(game.timer_id(Timer::Reveal), &mut ctx);
         assert!(game.is_finished());
         assert_eq!(game.view_for(3)["phase"], "game_over");
         assert_eq!(game.round, 1, "no next round");
@@ -849,7 +891,7 @@ mod tests {
         let ctx = pick(&mut game, 1, sams_card).unwrap();
         assert_eq!(ctx.outgoing[0].message["last_round"], false);
 
-        game.handle_timer(REVEAL_TIMER, &mut GameCtx::default());
+        game.handle_timer(game.timer_id(Timer::Reveal), &mut GameCtx::default());
         assert!(!game.is_finished());
         assert_eq!(game.round, 2);
     }
@@ -884,7 +926,10 @@ mod tests {
         let sams_card = game.submissions[&2][0].id;
 
         let ctx = pick(&mut game, 1, sams_card).unwrap();
-        assert_eq!(ctx.timers, [(REVEAL_TIMER, Duration::from_secs(9))]);
+        assert_eq!(
+            ctx.timers,
+            [(game.timer_id(Timer::Reveal), Duration::from_secs(9))]
+        );
     }
 
     #[test]
@@ -895,7 +940,7 @@ mod tests {
         pick(&mut game, 1, sams_card).unwrap();
 
         let mut ctx = GameCtx::default();
-        game.handle_timer(REVEAL_TIMER, &mut ctx);
+        game.handle_timer(game.timer_id(Timer::Reveal), &mut ctx);
         assert_eq!(game.round, 2);
         assert_eq!(game.phase, Phase::Submitting);
         assert_eq!(game.winner, None);
@@ -908,7 +953,7 @@ mod tests {
     fn a_late_next_round_timer_does_nothing() {
         let mut game = started_game(&[1, 2, 3]);
         let mut ctx = GameCtx::default();
-        game.handle_timer(REVEAL_TIMER, &mut ctx);
+        game.handle_timer(game.timer_id(Timer::Reveal), &mut ctx);
 
         assert_eq!(game.round, 1, "the round is still being played");
         assert!(ctx.outgoing.is_empty());
@@ -920,7 +965,7 @@ mod tests {
         let card = game.submissions[&first][0].id;
         let judge = game.judge.expect("a round has a judge");
         pick(game, judge, card).unwrap();
-        game.handle_timer(REVEAL_TIMER, &mut GameCtx::default());
+        game.handle_timer(game.timer_id(Timer::Reveal), &mut GameCtx::default());
     }
 
     #[test]
@@ -943,7 +988,7 @@ mod tests {
         pick(&mut game, 1, sams_card).unwrap();
 
         let mut ctx = GameCtx::default();
-        game.handle_timer(REVEAL_TIMER, &mut ctx);
+        game.handle_timer(game.timer_id(Timer::Reveal), &mut ctx);
         assert_eq!(ctx.outgoing[0].message["judge"], 2);
         assert_eq!(game.view_for(3)["judge"], 2);
     }
@@ -1026,6 +1071,50 @@ mod tests {
 
         assert_eq!(game.players, [1, 2, 3]);
         assert!(!game.hands.contains_key(&4));
+    }
+
+    #[test]
+    fn when_time_is_up_the_judge_reads_what_was_played() {
+        let mut game = started_game(&[1, 2, 3, 4]);
+        let card = game.hands[&2][0].id;
+        submit(&mut game, 2, &[card]).unwrap();
+
+        let mut ctx = GameCtx::default();
+        game.handle_timer(game.timer_id(Timer::Submit), &mut ctx);
+        assert_eq!(game.phase, Phase::Judging);
+        assert_eq!(game.reading_order, [2], "Kim and Lee sit this round out");
+        assert_eq!(
+            ctx.outgoing[0].message,
+            json!({ "event": "judging_started" })
+        );
+    }
+
+    #[test]
+    fn time_up_after_everyone_has_played_changes_nothing() {
+        let mut game = started_game(&[1, 2, 3]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+        let order = game.reading_order.clone();
+
+        let mut ctx = GameCtx::default();
+        game.handle_timer(game.timer_id(Timer::Submit), &mut ctx);
+        assert_eq!(game.reading_order, order, "not shuffled again");
+        assert!(ctx.outgoing.is_empty());
+    }
+
+    #[test]
+    fn a_timer_from_an_earlier_round_is_ignored() {
+        let mut game = started_game(&[1, 2, 3]);
+        let round_one_timer = game.timer_id(Timer::Submit);
+        everyone_submits(&mut game, &mut GameCtx::default());
+        finish_round(&mut game);
+
+        // Round 1's timer runs out while round 2 is being played
+        let card = game.hands[&3][0].id;
+        game.prompt = Some(starter_prompt(2));
+        submit(&mut game, 3, &[card]).unwrap();
+        game.handle_timer(round_one_timer, &mut GameCtx::default());
+        assert_eq!(game.round, 2);
+        assert_eq!(game.phase, Phase::Submitting);
     }
 
     #[test]
