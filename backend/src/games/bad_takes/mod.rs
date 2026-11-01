@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Duration;
 
 use rand::rngs::StdRng;
-use rand::seq::SliceRandom;
+use rand::seq::{IndexedRandom, SliceRandom};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -26,11 +26,14 @@ const MAX_PLAYERS: usize = 10;
 enum Timer {
     Submit = 1,
     Reveal = 2,
+    Judge = 3,
 }
 
 // How long players have to play their cards
 const SUBMIT_DURATION: Duration = Duration::from_secs(60);
 // The winning card, then the scores going up, before the next round or the final results
+// How long the judge has to pick, before a random answer wins
+const JUDGE_DURATION: Duration = Duration::from_secs(45);
 const REVEAL_DURATION: Duration = Duration::from_secs(9);
 
 // The registry entry, built at startup because the player limit depends on the deck
@@ -265,7 +268,11 @@ impl BadTakes {
         self.reading_order = self.submitted_players();
         self.reading_order.shuffle(&mut self.rng);
         self.phase = Phase::Judging;
-        ctx.broadcast(json!({ "event": "judging_started" }));
+        ctx.broadcast(json!({
+            "event": "judging_started",
+            "judge_for": JUDGE_DURATION.as_secs(),
+        }));
+        ctx.start_timer(self.timer_id(Timer::Judge), JUDGE_DURATION);
     }
 
     // Whoever hasn't played by now sits this round out
@@ -315,7 +322,18 @@ impl BadTakes {
                 message: "That card isn't one of the answers",
             });
         };
+        self.award_point(winner, false, ctx);
+        Ok(())
+    }
 
+    // The judge took too long, so a random answer wins and still gets the point
+    fn judge_time_up(&mut self, ctx: &mut GameCtx) {
+        if let Some(&winner) = self.reading_order.choose(&mut self.rng) {
+            self.award_point(winner, true, ctx);
+        }
+    }
+
+    fn award_point(&mut self, winner: PlayerId, judge_timed_out: bool, ctx: &mut GameCtx) {
         self.winner = Some(winner);
         let points = self.scores.entry(winner).or_default();
         *points += 1;
@@ -330,9 +348,9 @@ impl BadTakes {
             "points": points,
             "reveal_for": REVEAL_DURATION.as_secs(),
             "last_round": self.game_winner().is_some(),
+            "judge_timed_out": judge_timed_out,
         }));
         ctx.start_timer(self.timer_id(Timer::Reveal), REVEAL_DURATION);
-        Ok(())
     }
 
     // First to the room's points to win takes the game
@@ -401,6 +419,8 @@ impl Game for BadTakes {
         // Each timer only acts if its round is still at the step it was waiting on
         if timer == self.timer_id(Timer::Submit) && self.phase == Phase::Submitting {
             self.submit_time_up(ctx);
+        } else if timer == self.timer_id(Timer::Judge) && self.phase == Phase::Judging {
+            self.judge_time_up(ctx);
         } else if timer == self.timer_id(Timer::Reveal) && self.phase == Phase::RoundOver {
             self.reveal_over(ctx);
         }
@@ -688,7 +708,7 @@ mod tests {
         assert_eq!(game.phase, Phase::Judging);
         assert_eq!(
             ctx.outgoing.last().map(|outgoing| &outgoing.message),
-            Some(&json!({ "event": "judging_started" }))
+            Some(&json!({ "event": "judging_started", "judge_for": 45 }))
         );
         assert_eq!(game.view_for(1)["phase"], "judging");
     }
@@ -840,6 +860,7 @@ mod tests {
                 "points": 1,
                 "reveal_for": 9,
                 "last_round": false,
+                "judge_timed_out": false,
             })
         );
         let view = game.view_for(2);
@@ -1085,7 +1106,7 @@ mod tests {
         assert_eq!(game.reading_order, [2], "Kim and Lee sit this round out");
         assert_eq!(
             ctx.outgoing[0].message,
-            json!({ "event": "judging_started" })
+            json!({ "event": "judging_started", "judge_for": 45 })
         );
     }
 
@@ -1115,6 +1136,52 @@ mod tests {
         game.handle_timer(round_one_timer, &mut GameCtx::default());
         assert_eq!(game.round, 2);
         assert_eq!(game.phase, Phase::Submitting);
+    }
+
+    #[test]
+    fn the_judge_has_45_seconds() {
+        let mut game = started_game(&[1, 2, 3]);
+        let mut ctx = GameCtx::default();
+        everyone_submits(&mut game, &mut ctx);
+        assert_eq!(
+            ctx.timers,
+            [(game.timer_id(Timer::Judge), Duration::from_secs(45))]
+        );
+    }
+
+    #[test]
+    fn a_slow_judge_gives_the_point_to_a_random_answer() {
+        let mut game = started_game(&[1, 2, 3, 4]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+
+        let mut ctx = GameCtx::default();
+        game.handle_timer(game.timer_id(Timer::Judge), &mut ctx);
+        let winner = game.winner.expect("someone won");
+        assert!([2, 3, 4].contains(&winner));
+        assert_eq!(game.scores[&winner], 1);
+        assert_eq!(game.phase, Phase::RoundOver);
+        assert_eq!(ctx.outgoing[0].message["judge_timed_out"], true);
+        assert_eq!(
+            ctx.timers,
+            [(game.timer_id(Timer::Reveal), REVEAL_DURATION)]
+        );
+    }
+
+    #[test]
+    fn a_pick_in_time_beats_the_judge_timer() {
+        let mut game = started_game(&[1, 2, 3]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+        let sams_card = game.submissions[&2][0].id;
+        pick(&mut game, 1, sams_card).unwrap();
+
+        let mut ctx = GameCtx::default();
+        game.handle_timer(game.timer_id(Timer::Judge), &mut ctx);
+        assert_eq!(
+            game.scores.values().sum::<u8>(),
+            1,
+            "only one point this round"
+        );
+        assert!(ctx.outgoing.is_empty());
     }
 
     #[test]
