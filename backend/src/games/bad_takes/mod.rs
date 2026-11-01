@@ -63,6 +63,10 @@ enum Action {
 pub struct BadTakes {
     points_to_win: u8,
     players: Vec<PlayerId>,
+    // Late joiners, seated at the start of the next round
+    waiting: Vec<PlayerId>,
+    // Seats at the table, limited by the deck
+    max_players: usize,
     // Points per player, in player order so every view lists them the same way
     scores: BTreeMap<PlayerId, u8>,
     prompts: Deck<PromptCard>,
@@ -95,6 +99,8 @@ impl BadTakes {
         BadTakes {
             points_to_win,
             players: Vec::new(),
+            waiting: Vec::new(),
+            max_players: max_players(answers.len()),
             scores: BTreeMap::new(),
             prompts: Deck::shuffled(prompts, &mut rng),
             answers: Deck::shuffled(answers, &mut rng),
@@ -115,6 +121,13 @@ impl BadTakes {
     fn start_round(&mut self, ctx: &mut GameCtx) {
         self.round += 1;
         self.phase = Phase::Submitting;
+        // Late joiners go to the end of the judge rotation, while there's a free seat
+        while self.players.len() < self.max_players && !self.waiting.is_empty() {
+            let player = self.waiting.remove(0);
+            self.players.push(player);
+            self.scores.insert(player, 0);
+        }
+
         // Last round's cards stay on the table until now, so everyone can see the reveal
         self.discard
             .extend(self.submissions.drain().flat_map(|(_, cards)| cards));
@@ -361,10 +374,13 @@ impl Game for BadTakes {
         }
     }
 
-    fn player_joined(&mut self, _player: PlayerId, _ctx: &mut GameCtx) {}
+    fn player_joined(&mut self, player: PlayerId, _ctx: &mut GameCtx) {
+        self.waiting.push(player);
+    }
 
     fn player_left(&mut self, player: PlayerId, ctx: &mut GameCtx) {
         self.players.retain(|&id| id != player);
+        self.waiting.retain(|&id| id != player);
         self.scores.remove(&player);
         // Their cards go to the discard pile, so the deck doesn't shrink
         if let Some(hand) = self.hands.remove(&player) {
@@ -383,6 +399,7 @@ impl Game for BadTakes {
         json!({
             "points_to_win": self.points_to_win,
             "scores": self.scores,
+            "waiting": self.waiting,
             "round": self.round,
             "phase": self.phase,
             "judge": self.judge,
@@ -938,6 +955,77 @@ mod tests {
         everyone_submits(&mut game, &mut GameCtx::default());
         finish_round(&mut game);
         assert_eq!(game.judge, Some(3));
+    }
+
+    #[test]
+    fn a_late_joiner_waits_for_the_next_round() {
+        let mut game = started_game(&[1, 2, 3]);
+        game.player_joined(4, &mut GameCtx::default());
+
+        let view = game.view_for(4);
+        assert_eq!(view["hand"], json!(null));
+        assert_eq!(view["waiting"], json!([4]));
+        let result = submit(&mut game, 4, &[1]);
+        assert_eq!(result.err().map(|error| error.code), Some("not_playing"));
+
+        // The round doesn't wait for them either
+        everyone_submits(&mut game, &mut GameCtx::default());
+        assert_eq!(game.phase, Phase::Judging);
+    }
+
+    #[test]
+    fn a_late_joiner_is_dealt_in_at_the_next_round() {
+        let mut game = started_game(&[1, 2, 3]);
+        game.player_joined(4, &mut GameCtx::default());
+        everyone_submits(&mut game, &mut GameCtx::default());
+        finish_round(&mut game);
+
+        assert_eq!(game.hands[&4].len(), HAND_SIZE);
+        assert_eq!(game.scores[&4], 0);
+        assert!(game.waiting.is_empty());
+        assert_eq!(cards_in_play(&game), 140);
+    }
+
+    #[test]
+    fn a_late_joiner_judges_last() {
+        let mut game = started_game(&[1, 2, 3]);
+        game.player_joined(4, &mut GameCtx::default());
+        let mut judges = vec![game.judge];
+        for _ in 0..4 {
+            everyone_submits(&mut game, &mut GameCtx::default());
+            finish_round(&mut game);
+            judges.push(game.judge);
+        }
+        assert_eq!(judges, [Some(1), Some(2), Some(3), Some(4), Some(1)]);
+    }
+
+    #[test]
+    fn a_full_table_keeps_late_joiners_waiting() {
+        let mut game = started_game(&[1, 2, 3, 4]);
+        game.max_players = 4;
+        game.player_joined(5, &mut GameCtx::default());
+        everyone_submits(&mut game, &mut GameCtx::default());
+        finish_round(&mut game);
+        assert_eq!(game.waiting, [5], "no free seat yet");
+
+        // A seat frees up, and they take it at the next round
+        game.player_left(3, &mut GameCtx::default());
+        everyone_submits(&mut game, &mut GameCtx::default());
+        finish_round(&mut game);
+        assert_eq!(game.players, [1, 2, 4, 5]);
+        assert_eq!(game.hands[&5].len(), HAND_SIZE);
+    }
+
+    #[test]
+    fn a_waiting_player_who_leaves_is_forgotten() {
+        let mut game = started_game(&[1, 2, 3]);
+        game.player_joined(4, &mut GameCtx::default());
+        game.player_left(4, &mut GameCtx::default());
+        everyone_submits(&mut game, &mut GameCtx::default());
+        finish_round(&mut game);
+
+        assert_eq!(game.players, [1, 2, 3]);
+        assert!(!game.hands.contains_key(&4));
     }
 
     #[test]
