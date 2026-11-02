@@ -75,6 +75,9 @@ enum Action {
 pub struct BadTakes {
     points_to_win: u8,
     players: Vec<PlayerId>,
+    // Everyone who has sat at the table, in join order. Leavers stay, so the judge
+    // rotation still knows where they sat
+    seating: Vec<PlayerId>,
     // Late joiners, seated at the start of the next round
     waiting: Vec<PlayerId>,
     // Seats at the table, limited by the deck
@@ -111,6 +114,7 @@ impl BadTakes {
         BadTakes {
             points_to_win,
             players: Vec::new(),
+            seating: Vec::new(),
             waiting: Vec::new(),
             max_players: max_players(answers.len()),
             scores: BTreeMap::new(),
@@ -137,6 +141,7 @@ impl BadTakes {
         while self.players.len() < self.max_players && !self.waiting.is_empty() {
             let player = self.waiting.remove(0);
             self.players.push(player);
+            self.seating.push(player);
             self.scores.insert(player, 0);
         }
 
@@ -168,12 +173,23 @@ impl BadTakes {
     fn next_judge(&self) -> Option<PlayerId> {
         let after_judge = self
             .judge
-            .and_then(|judge| self.players.iter().position(|&player| player == judge))
+            .and_then(|judge| self.seating.iter().position(|&player| player == judge))
             .map_or(0, |seat| seat + 1);
-        self.players
-            .get(after_judge)
-            .or(self.players.first())
-            .copied()
+        // Walk round the table from there, skipping anyone who has left
+        (0..self.seating.len())
+            .map(|step| self.seating[(after_judge + step) % self.seating.len()])
+            .find(|player| self.players.contains(player))
+    }
+
+    // The judge left mid-round: everyone takes their cards back and the next judge starts again
+    fn cancel_round(&mut self, ctx: &mut GameCtx) {
+        for (player, cards) in self.submissions.drain() {
+            if let Some(hand) = self.hands.get_mut(&player) {
+                hand.extend(cards);
+            }
+        }
+        ctx.broadcast(json!({ "event": "round_cancelled" }));
+        self.start_round(ctx);
     }
 
     fn submit(
@@ -399,6 +415,7 @@ impl BadTakes {
 impl Game for BadTakes {
     fn start(&mut self, players: &[PlayerId], ctx: &mut GameCtx) {
         self.players = players.to_vec();
+        self.seating = players.to_vec();
         for &player in players {
             self.scores.insert(player, 0);
         }
@@ -451,8 +468,12 @@ impl Game for BadTakes {
             self.discard.extend(cards);
         }
         self.reading_order.retain(|&id| id != player);
-        // The last answer on the table left with its player
-        if self.phase == Phase::Judging && self.reading_order.is_empty() {
+
+        let mid_round = matches!(self.phase, Phase::Submitting | Phase::Judging);
+        if mid_round && self.judge == Some(player) {
+            self.cancel_round(ctx);
+        } else if self.phase == Phase::Judging && self.reading_order.is_empty() {
+            // The last answer on the table left with its player
             self.skip_round(ctx);
         }
         // The others no longer wait for them
@@ -1224,6 +1245,73 @@ mod tests {
         assert_eq!(ctx.outgoing[0].message, json!({ "event": "round_skipped" }));
         assert_eq!(game.round, 2);
         assert_eq!(game.phase, Phase::Submitting);
+    }
+
+    #[test]
+    fn the_judge_leaving_cancels_the_round() {
+        let mut game = started_game(&[1, 2, 3, 4]);
+        let sams_card = game.hands[&2][0].clone();
+        submit(&mut game, 2, &[sams_card.id]).unwrap();
+
+        let mut ctx = GameCtx::default();
+        game.player_left(1, &mut ctx);
+        assert_eq!(
+            ctx.outgoing[0].message,
+            json!({ "event": "round_cancelled" })
+        );
+        assert_eq!(game.round, 2);
+        assert_eq!(game.judge, Some(2));
+        assert!(game.hands[&2].contains(&sams_card), "Sam has his card back");
+        assert_eq!(game.hands[&2].len(), HAND_SIZE);
+        assert_eq!(game.discard.len(), HAND_SIZE, "only the judge's hand");
+        assert_eq!(cards_in_play(&game), 140);
+    }
+
+    #[test]
+    fn the_judge_leaving_while_reading_cancels_the_round() {
+        let mut game = started_game(&[1, 2, 3, 4]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+
+        game.player_left(1, &mut GameCtx::default());
+        assert_eq!(game.phase, Phase::Submitting);
+        assert!(game.submissions.is_empty());
+        for player in [2, 3, 4] {
+            assert_eq!(game.hands[&player].len(), HAND_SIZE);
+        }
+        assert_eq!(game.scores.values().sum::<u8>(), 0, "no point");
+    }
+
+    #[test]
+    fn the_player_after_a_leaving_judge_judges_next() {
+        let mut game = started_game(&[1, 2, 3, 4]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+        finish_round(&mut game);
+        assert_eq!(game.judge, Some(2));
+
+        game.player_left(2, &mut GameCtx::default());
+        let mut judges = vec![game.judge];
+        for _ in 0..3 {
+            everyone_submits(&mut game, &mut GameCtx::default());
+            finish_round(&mut game);
+            judges.push(game.judge);
+        }
+        assert_eq!(judges, [Some(3), Some(4), Some(1), Some(3)]);
+    }
+
+    #[test]
+    fn a_judge_leaving_during_the_reveal_keeps_the_point() {
+        let mut game = started_game(&[1, 2, 3, 4]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+        let sams_card = game.submissions[&2][0].id;
+        pick(&mut game, 1, sams_card).unwrap();
+
+        let mut ctx = GameCtx::default();
+        game.player_left(1, &mut ctx);
+        assert!(ctx.outgoing.is_empty(), "the round already ended");
+        assert_eq!(game.scores[&2], 1);
+
+        game.handle_timer(game.timer_id(Timer::Reveal), &mut GameCtx::default());
+        assert_eq!(game.judge, Some(2));
     }
 
     #[test]
