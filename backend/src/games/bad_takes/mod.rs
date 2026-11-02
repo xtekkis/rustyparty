@@ -277,9 +277,17 @@ impl BadTakes {
 
     // Whoever hasn't played by now sits this round out
     fn submit_time_up(&mut self, ctx: &mut GameCtx) {
-        if !self.submissions.is_empty() {
+        if self.submissions.is_empty() {
+            self.skip_round(ctx);
+        } else {
             self.start_judging(ctx);
         }
+    }
+
+    // Nothing to judge: no point this round, and the next judge starts a new one
+    fn skip_round(&mut self, ctx: &mut GameCtx) {
+        ctx.broadcast(json!({ "event": "round_skipped" }));
+        self.start_round(ctx);
     }
 
     // The reveal is over: the game ends, or the next round starts
@@ -443,6 +451,10 @@ impl Game for BadTakes {
             self.discard.extend(cards);
         }
         self.reading_order.retain(|&id| id != player);
+        // The last answer on the table left with its player
+        if self.phase == Phase::Judging && self.reading_order.is_empty() {
+            self.skip_round(ctx);
+        }
         // The others no longer wait for them
         self.judge_when_everyone_submitted(ctx);
     }
@@ -1182,6 +1194,36 @@ mod tests {
             "only one point this round"
         );
         assert!(ctx.outgoing.is_empty());
+    }
+
+    #[test]
+    fn nobody_playing_skips_the_round() {
+        let mut game = started_game(&[1, 2, 3]);
+        let hands_before = game.hands.clone();
+
+        let mut ctx = GameCtx::default();
+        game.handle_timer(game.timer_id(Timer::Submit), &mut ctx);
+        assert_eq!(ctx.outgoing[0].message, json!({ "event": "round_skipped" }));
+        assert_eq!(ctx.outgoing[1].message["event"], "round_started");
+        assert_eq!(game.round, 2);
+        assert_eq!(game.judge, Some(2), "the next judge takes over");
+        assert_eq!(game.scores.values().sum::<u8>(), 0, "no point");
+        assert_eq!(game.hands, hands_before, "everyone keeps their cards");
+    }
+
+    #[test]
+    fn the_round_is_skipped_when_every_answer_has_left() {
+        let mut game = started_game(&[1, 2, 3, 4, 5]);
+        let card = game.hands[&2][0].id;
+        submit(&mut game, 2, &[card]).unwrap();
+        game.handle_timer(game.timer_id(Timer::Submit), &mut GameCtx::default());
+        assert_eq!(game.reading_order, [2]);
+
+        let mut ctx = GameCtx::default();
+        game.player_left(2, &mut ctx);
+        assert_eq!(ctx.outgoing[0].message, json!({ "event": "round_skipped" }));
+        assert_eq!(game.round, 2);
+        assert_eq!(game.phase, Phase::Submitting);
     }
 
     #[test]
