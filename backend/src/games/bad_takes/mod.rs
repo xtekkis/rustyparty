@@ -410,6 +410,11 @@ impl BadTakes {
     fn deal_to(&mut self, player: PlayerId) {
         let hand = self.hands.entry(player).or_default();
         while hand.len() < HAND_SIZE {
+            // The deck ran out: the played cards are shuffled into a new one
+            if self.answers.is_empty() && !self.discard.is_empty() {
+                let played = std::mem::take(&mut self.discard);
+                self.answers = Deck::shuffled(played, &mut self.rng);
+            }
             let Some(card) = self.answers.draw() else {
                 break;
             };
@@ -1390,6 +1395,34 @@ mod tests {
         }
         assert_eq!(game.answers.len(), 140 - 3 * HAND_SIZE - 4);
         assert_eq!(cards_in_play(&game), 140);
+    }
+
+    #[test]
+    fn the_discard_pile_becomes_the_new_deck() {
+        let mut game = started_game(&[1, 2, 3]);
+        // Every card not in a hand has already been played
+        while let Some(card) = game.answers.draw() {
+            game.discard.push(card);
+        }
+        everyone_submits(&mut game, &mut GameCtx::default());
+        finish_round(&mut game);
+
+        for player in [1, 2, 3] {
+            assert_eq!(game.hands[&player].len(), HAND_SIZE);
+        }
+        assert!(game.discard.is_empty());
+        assert_eq!(game.answers.len(), 140 - 3 * HAND_SIZE);
+        assert_eq!(cards_in_play(&game), 140);
+    }
+
+    #[test]
+    fn the_deck_is_only_reshuffled_once_it_runs_out() {
+        let mut game = started_game(&[1, 2, 3]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+        finish_round(&mut game);
+
+        assert_eq!(game.discard.len(), 2, "last round's cards wait in the pile");
+        assert_eq!(game.answers.len(), 140 - 3 * HAND_SIZE - 2);
     }
 
     #[test]
