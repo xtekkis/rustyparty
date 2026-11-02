@@ -309,15 +309,21 @@ impl BadTakes {
     // The reveal is over: the game ends, or the next round starts
     fn reveal_over(&mut self, ctx: &mut GameCtx) {
         if let Some(winner) = self.game_winner() {
-            self.phase = Phase::GameOver;
-            ctx.broadcast(json!({
-                "event": "game_over",
-                "winner": winner,
-                "scores": self.scores,
-            }));
+            self.end_game(Some(winner), "points_to_win", ctx);
         } else {
             self.start_round(ctx);
         }
+    }
+
+    // The final scores, and why the game ended
+    fn end_game(&mut self, winner: Option<PlayerId>, reason: &str, ctx: &mut GameCtx) {
+        self.phase = Phase::GameOver;
+        ctx.broadcast(json!({
+            "event": "game_over",
+            "reason": reason,
+            "winner": winner,
+            "scores": self.scores,
+        }));
     }
 
     fn pick(&mut self, player: PlayerId, card: CardId, ctx: &mut GameCtx) -> Result<(), GameError> {
@@ -468,6 +474,13 @@ impl Game for BadTakes {
             self.discard.extend(cards);
         }
         self.reading_order.retain(|&id| id != player);
+
+        // Waiting players count, they take a seat at the next round
+        let too_few = self.players.len() + self.waiting.len() < MIN_PLAYERS;
+        if too_few && self.phase != Phase::GameOver {
+            self.end_game(None, "not_enough_players", ctx);
+            return;
+        }
 
         let mid_round = matches!(self.phase, Phase::Submitting | Phase::Judging);
         if mid_round && self.judge == Some(player) {
@@ -931,7 +944,12 @@ mod tests {
         assert_eq!(game.round, 1, "no next round");
         assert_eq!(
             ctx.outgoing[0].message,
-            json!({ "event": "game_over", "winner": 2, "scores": { "1": 0, "2": 7, "3": 0 } })
+            json!({
+                "event": "game_over",
+                "reason": "points_to_win",
+                "winner": 2,
+                "scores": { "1": 0, "2": 7, "3": 0 },
+            })
         );
     }
 
@@ -961,6 +979,48 @@ mod tests {
         }
         assert_eq!(game.scores.values().max(), Some(&3));
         assert_eq!(game.scores.values().sum::<u8>(), game.round as u8);
+    }
+
+    #[test]
+    fn fewer_than_three_players_ends_the_game() {
+        let mut game = started_game(&[1, 2, 3]);
+        game.scores.insert(2, 4);
+
+        let mut ctx = GameCtx::default();
+        game.player_left(3, &mut ctx);
+        assert!(game.is_finished());
+        assert_eq!(
+            ctx.outgoing[0].message,
+            json!({
+                "event": "game_over",
+                "reason": "not_enough_players",
+                "winner": null,
+                "scores": { "1": 0, "2": 4 },
+            })
+        );
+        assert_eq!(ctx.outgoing.len(), 1, "no new round starts");
+    }
+
+    #[test]
+    fn a_waiting_player_keeps_the_game_going() {
+        let mut game = started_game(&[1, 2, 3]);
+        game.player_joined(4, &mut GameCtx::default());
+        game.player_left(3, &mut GameCtx::default());
+        assert!(!game.is_finished());
+
+        everyone_submits(&mut game, &mut GameCtx::default());
+        finish_round(&mut game);
+        assert_eq!(game.players, [1, 2, 4]);
+    }
+
+    #[test]
+    fn leaving_after_the_game_is_over_changes_nothing() {
+        let mut game = started_game(&[1, 2, 3]);
+        game.player_left(3, &mut GameCtx::default());
+
+        let mut ctx = GameCtx::default();
+        game.player_left(2, &mut ctx);
+        assert!(ctx.outgoing.is_empty(), "game over is only said once");
     }
 
     #[test]
