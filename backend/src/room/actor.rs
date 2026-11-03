@@ -825,6 +825,73 @@ mod tests {
         }
     }
 
+    // A player plays the first cards in their hand, one for each gap, and returns their ids
+    fn play_first_cards(
+        room: &mut Room,
+        player_id: u32,
+        view: &Value,
+        me: &WeakSender<RoomCommand>,
+    ) -> Vec<Value> {
+        let gaps = view["prompt"]["pick"].as_u64().expect("pick") as usize;
+        let hand = view["hand"].as_array().expect("a hand");
+        let cards: Vec<Value> = hand[..gaps].iter().map(|card| card["id"].clone()).collect();
+        room.game_action(player_id, json!({ "kind": "submit", "cards": cards }), me);
+        cards
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_judge_gives_the_point_to_a_random_answer() {
+        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
+        let (commands, mut reminders) = mpsc::channel(16);
+        let me = commands.downgrade();
+        room.start_game(&crate::games::bad_takes::info(), &me);
+        for player_id in [2, 3] {
+            let (_, view) = game_messages(&mut phones[player_id as usize - 1]);
+            play_first_cards(&mut room, player_id, &view, &me);
+        }
+
+        // Alex never picks, so after 45 seconds a random answer wins
+        tokio::time::sleep(Duration::from_secs(46)).await;
+        while let Ok(reminder) = reminders.try_recv() {
+            room.handle(reminder, &me);
+        }
+        let (events, view) = game_messages(&mut phones[0]);
+        let reveal = events.last().expect("the reveal");
+        assert_eq!(reveal["event"], "winner_revealed");
+        assert_eq!(reveal["judge_timed_out"], true);
+        let winner = reveal["winner"].as_u64().expect("a winner").to_string();
+        assert!(winner == "2" || winner == "3");
+        assert_eq!(view["scores"][&winner], 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_judge_leaving_cancels_the_round() {
+        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim", "Lee"]);
+        let (commands, _reminders) = mpsc::channel(16);
+        let me = commands.downgrade();
+        room.start_game(&crate::games::bad_takes::info(), &me);
+        let (_, sam_sees) = game_messages(&mut phones[1]);
+        let sams_cards = play_first_cards(&mut room, 2, &sam_sees, &me);
+
+        // Alex, the judge, leaves before anyone wins
+        room.leave(1, &me);
+        let (events, view) = game_messages(&mut phones[1]);
+        assert!(events.contains(&json!({ "event": "round_cancelled" })));
+        assert_eq!(view["round"], 2);
+        assert_eq!(view["judge"], 2, "the next player judges");
+        let hand: Vec<&Value> = view["hand"]
+            .as_array()
+            .expect("a hand")
+            .iter()
+            .map(|card| &card["id"])
+            .collect();
+        assert_eq!(hand.len(), 7);
+        for card in &sams_cards {
+            assert!(hand.contains(&card), "Sam has his cards back");
+        }
+        assert_eq!(view["scores"], json!({ "2": 0, "3": 0, "4": 0 }));
+    }
+
     #[tokio::test(start_paused = true)]
     async fn finished_game_shows_results_then_the_lobby() {
         let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
