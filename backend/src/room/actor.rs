@@ -892,6 +892,68 @@ mod tests {
         assert_eq!(view["scores"], json!({ "2": 0, "3": 0, "4": 0 }));
     }
 
+    // Add everything this phone got to its log, as the JSON it would see, and return the
+    // last game view if there was one
+    fn read_phone(
+        messages: &mut UnboundedReceiver<ServerMessage>,
+        log: &mut String,
+    ) -> Option<Value> {
+        let mut view = None;
+        while let Ok(message) = messages.try_recv() {
+            log.push_str(&serde_json::to_string(&message).expect("messages are JSON"));
+            if let ServerMessage::GameView { view: latest } = message {
+                view = Some(latest);
+            }
+        }
+        view
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn hands_are_never_sent_to_other_players() {
+        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim", "Lee"]);
+        let (commands, mut reminders) = mpsc::channel(16);
+        let me = commands.downgrade();
+        let mut logs = vec![String::new(); phones.len()];
+        let mut views = vec![Value::Null; phones.len()];
+        let mut read_all = |phones: &mut Vec<UnboundedReceiver<ServerMessage>>| {
+            for (index, phone) in phones.iter_mut().enumerate() {
+                if let Some(view) = read_phone(phone, &mut logs[index]) {
+                    views[index] = view;
+                }
+            }
+            (views.clone(), logs.clone())
+        };
+
+        // A whole round and the start of the next: deal, play, judge, reveal, refill
+        room.start_game(&crate::games::bad_takes::info(), &me);
+        let (seen, _) = read_all(&mut phones);
+        for player_id in [2, 3, 4] {
+            play_first_cards(&mut room, player_id, &seen[player_id as usize - 1], &me);
+        }
+        let (seen, _) = read_all(&mut phones);
+        let picked = seen[0]["cards_to_judge"][0][0]["id"].clone();
+        room.game_action(1, json!({ "kind": "pick", "card": picked }), &me);
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        while let Ok(reminder) = reminders.try_recv() {
+            room.handle(reminder, &me);
+        }
+        let (seen, logs) = read_all(&mut phones);
+        assert_eq!(seen[0]["round"], 2);
+
+        // No card still in someone's hand ever reached another phone
+        for (owner, view) in seen.iter().enumerate() {
+            for card in view["hand"].as_array().expect("a hand") {
+                let text = serde_json::to_string(&card["text"]).expect("text");
+                for (reader, log) in logs.iter().enumerate() {
+                    if reader != owner {
+                        assert!(!log.contains(&text), "phone {reader} saw {text}");
+                    }
+                }
+                assert!(logs[owner].contains(&text), "the owner sees their own card");
+            }
+        }
+    }
+
     #[tokio::test(start_paused = true)]
     async fn finished_game_shows_results_then_the_lobby() {
         let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
