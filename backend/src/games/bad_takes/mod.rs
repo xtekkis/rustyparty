@@ -85,6 +85,8 @@ pub struct BadTakes {
     // Points per player, in player order so every view lists them the same way
     scores: BTreeMap<PlayerId, u8>,
     prompts: Deck<PromptCard>,
+    // Prompts from earlier rounds, shuffled back in when the prompt deck runs out
+    used_prompts: Vec<PromptCard>,
     answers: Deck<AnswerCard>,
     // Played cards, out of the game until the answer deck runs out
     discard: Vec<AnswerCard>,
@@ -119,6 +121,7 @@ impl BadTakes {
             max_players: max_players(answers.len()),
             scores: BTreeMap::new(),
             prompts: Deck::shuffled(prompts, &mut rng),
+            used_prompts: Vec::new(),
             answers: Deck::shuffled(answers, &mut rng),
             discard: Vec::new(),
             hands: HashMap::new(),
@@ -154,6 +157,12 @@ impl BadTakes {
         self.reading_order.clear();
         self.winner = None;
         self.judge = self.next_judge();
+        // Last round's prompt is used up. Out of prompts, the used ones become a new deck
+        self.used_prompts.extend(self.prompt.take());
+        if self.prompts.is_empty() {
+            let used = std::mem::take(&mut self.used_prompts);
+            self.prompts = Deck::shuffled(used, &mut self.rng);
+        }
         self.prompt = self.prompts.draw();
         ctx.broadcast(json!({
             "event": "round_started",
@@ -1423,6 +1432,30 @@ mod tests {
 
         assert_eq!(game.discard.len(), 2, "last round's cards wait in the pile");
         assert_eq!(game.answers.len(), 140 - 3 * HAND_SIZE - 2);
+    }
+
+    #[test]
+    fn used_prompts_are_shuffled_into_a_new_deck() {
+        let mut game = started_game(&[1, 2, 3]);
+        while let Some(prompt) = game.prompts.draw() {
+            game.used_prompts.push(prompt);
+        }
+        game.handle_timer(game.timer_id(Timer::Submit), &mut GameCtx::default());
+
+        assert_eq!(game.round, 2);
+        assert!(game.prompt.is_some(), "a prompt from the new deck");
+        assert!(game.used_prompts.is_empty());
+        assert_eq!(game.prompts.len(), 45 - 1);
+    }
+
+    #[test]
+    fn every_prompt_is_somewhere() {
+        let mut game = started_game(&[1, 2, 3]);
+        for _ in 0..50 {
+            game.handle_timer(game.timer_id(Timer::Submit), &mut GameCtx::default());
+            let in_play = usize::from(game.prompt.is_some());
+            assert_eq!(game.prompts.len() + game.used_prompts.len() + in_play, 45);
+        }
     }
 
     #[test]
