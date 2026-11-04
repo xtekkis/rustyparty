@@ -11,9 +11,15 @@ use crate::AppState;
 use crate::protocol::{ClientMessage, ServerMessage};
 use crate::room::actor::{Connection, RoomCommand, RoomHandle};
 
+// The biggest real message, a join, is well under 1 KB. Without a limit one message
+// could be 64 MB, all of it read into memory before it's refused
+const MAX_MESSAGE_SIZE: usize = 16 * 1024;
+
 // Upgrade the HTTP request to a WebSocket
 pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
-    ws.on_upgrade(move |socket| handle_socket(socket, state))
+    ws.max_message_size(MAX_MESSAGE_SIZE)
+        .max_frame_size(MAX_MESSAGE_SIZE)
+        .on_upgrade(move |socket| handle_socket(socket, state))
 }
 
 // One player's connection: read from the phone and forward messages from their room
