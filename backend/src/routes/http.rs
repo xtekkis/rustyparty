@@ -9,7 +9,7 @@ use tokio::sync::oneshot;
 use crate::AppState;
 use crate::error::AppError;
 use crate::room::actor::{RoomCommand, RoomHandle};
-use crate::room::code::generate_code;
+use crate::room::code::{MAX_CODE_ATTEMPTS, free_code};
 
 // Health check
 pub async fn health() -> &'static str {
@@ -22,17 +22,17 @@ pub struct CreateRoomResponse {
 }
 
 // Create a room with a new code
-pub async fn create_room(State(state): State<AppState>) -> (StatusCode, Json<CreateRoomResponse>) {
+pub async fn create_room(
+    State(state): State<AppState>,
+) -> Result<(StatusCode, Json<CreateRoomResponse>), AppError> {
     // Check and insert under one lock so two requests can't take the same code
     let code = {
         let mut rooms = state.rooms.lock().unwrap();
 
-        // Try new codes until one is free
-        let code = loop {
-            let code = generate_code();
-            if !rooms.contains_key(&code) {
-                break code;
-            }
+        // Nearly every code in use means someone is creating rooms nonstop
+        let Some(code) = free_code(|code| rooms.contains_key(code)) else {
+            tracing::warn!("No free room code after {MAX_CODE_ATTEMPTS} tries");
+            return Err(AppError::NoFreeRoomCode);
         };
 
         let room = RoomHandle::spawn(code.clone(), state.rooms.clone());
@@ -41,7 +41,7 @@ pub async fn create_room(State(state): State<AppState>) -> (StatusCode, Json<Cre
     };
     tracing::info!("Created room {code}");
 
-    (StatusCode::CREATED, Json(CreateRoomResponse { code }))
+    Ok((StatusCode::CREATED, Json(CreateRoomResponse { code })))
 }
 
 #[derive(Serialize)]

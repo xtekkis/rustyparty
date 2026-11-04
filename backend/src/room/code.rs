@@ -3,6 +3,8 @@ use rand::RngExt;
 // Room code letters, without I and O
 const CODE_LETTERS: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ";
 const CODE_LENGTH: usize = 4;
+// Tries before giving up, so the server answers quickly even when almost every code is taken
+pub const MAX_CODE_ATTEMPTS: usize = 100;
 
 // Random room code like "KXTP"
 pub fn generate_code() -> String {
@@ -15,10 +17,44 @@ pub fn generate_code() -> String {
     code
 }
 
+// A code nobody is using, or None if every try was taken
+pub fn free_code(is_taken: impl Fn(&str) -> bool) -> Option<String> {
+    free_code_from(generate_code, is_taken)
+}
+
+fn free_code_from(
+    mut generate: impl FnMut() -> String,
+    is_taken: impl Fn(&str) -> bool,
+) -> Option<String> {
+    (0..MAX_CODE_ATTEMPTS)
+        .map(|_| generate())
+        .find(|code| !is_taken(code))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_free_code_is_found() {
+        let mut codes = ["KXTP", "KXTP", "ABCD"].into_iter();
+        let code = free_code_from(|| codes.next().unwrap().to_string(), |code| code == "KXTP");
+        assert_eq!(code.as_deref(), Some("ABCD"));
+    }
+
+    #[test]
+    fn it_gives_up_when_every_code_is_taken() {
+        let mut tries = 0;
+        let code = free_code_from(
+            || {
+                tries += 1;
+                "KXTP".to_string()
+            },
+            |_| true,
+        );
+        assert_eq!(code, None);
+        assert_eq!(tries, MAX_CODE_ATTEMPTS);
+    }
     // Codes are random, so check many of them
     #[test]
     fn code_has_four_uppercase_letters() {

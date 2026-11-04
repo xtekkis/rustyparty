@@ -9,6 +9,7 @@ use serde::Serialize;
 #[derive(Debug)]
 pub enum AppError {
     RoomNotFound,
+    NoFreeRoomCode,
 }
 
 // JSON body for every error
@@ -26,6 +27,11 @@ impl IntoResponse for AppError {
                 "room_not_found",
                 "No room with that code",
             ),
+            AppError::NoFreeRoomCode => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "rooms_full",
+                "The server is full, try again in a few minutes",
+            ),
         };
 
         (status, Json(ErrorBody { code, message })).into_response()
@@ -40,5 +46,11 @@ mod tests {
     fn room_not_found_is_404() {
         let response = AppError::RoomNotFound.into_response();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn no_free_room_code_is_503() {
+        let response = AppError::NoFreeRoomCode.into_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 }
