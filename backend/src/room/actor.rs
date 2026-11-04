@@ -8,7 +8,7 @@ use tokio::time::Instant;
 
 use super::player::is_known_avatar;
 use super::vote::pick_winner;
-use super::{Room, RoomState, clean_nickname, is_valid_points_to_win};
+use super::{MAX_ROOM_PLAYERS, Room, RoomState, clean_nickname, is_valid_points_to_win};
 use crate::games::{GameCtx, GameInfo, Outgoing, Recipient, TimerId, find_game};
 use crate::protocol::ServerMessage;
 use serde_json::Value;
@@ -276,6 +276,10 @@ impl Room {
             send(&connection, ServerMessage::error(code, message));
             None
         };
+        // Players in their grace period still hold a seat
+        if self.players.len() >= MAX_ROOM_PLAYERS {
+            return error("room_full", "This room is full");
+        }
         let Some(nickname) = clean_nickname(&nickname) else {
             return error("invalid_nickname", "Nickname must be 1 to 16 characters");
         };
@@ -766,6 +770,48 @@ mod tests {
             }
         }
         (events, view)
+    }
+
+    fn full_room() -> (Room, Vec<UnboundedReceiver<ServerMessage>>) {
+        let names: Vec<String> = (1..=MAX_ROOM_PLAYERS)
+            .map(|n| format!("Player {n}"))
+            .collect();
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        room_with(&names)
+    }
+
+    #[tokio::test]
+    async fn a_full_room_turns_new_players_away() {
+        let (mut room, _phones) = full_room();
+        let (_commands, me) = test_me();
+        let (connection, mut messages) = mpsc::unbounded_channel();
+
+        let joined = room.join("Late".to_string(), None, None, connection, &me);
+        assert_eq!(joined, None);
+        assert_eq!(error_code(messages.try_recv().ok()), "room_full");
+        assert_eq!(room.players.len(), MAX_ROOM_PLAYERS);
+    }
+
+    #[tokio::test]
+    async fn a_full_room_still_lets_players_back_in() {
+        let (mut room, _phones) = full_room();
+        let (_commands, me) = test_me();
+        let token = room.players[2].token.clone();
+        let (connection, _messages) = mpsc::unbounded_channel();
+
+        let joined = room.join("Player 3".to_string(), None, Some(token), connection, &me);
+        assert_eq!(joined, Some(3));
+    }
+
+    #[tokio::test]
+    async fn a_seat_frees_up_when_someone_leaves() {
+        let (mut room, _phones) = full_room();
+        let (_commands, me) = test_me();
+        room.leave(4, &me);
+        let (connection, _messages) = mpsc::unbounded_channel();
+
+        let joined = room.join("Late".to_string(), None, None, connection, &me);
+        assert!(joined.is_some());
     }
 
     #[tokio::test(start_paused = true)]

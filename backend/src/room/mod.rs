@@ -13,6 +13,8 @@ use crate::protocol::{LobbyPlayer, RoomSettings, ServerMessage, VoteOption};
 use player::{Player, generate_token};
 
 const NICKNAME_MAX_LENGTH: usize = 16;
+// The most any game allows, so a room can't be flooded with extra players
+pub const MAX_ROOM_PLAYERS: usize = 10;
 
 const POINTS_TO_WIN_DEFAULT: u8 = 7;
 const POINTS_TO_WIN_MIN: u8 = 3;
@@ -298,6 +300,17 @@ mod tests {
     use super::*;
     use std::time::Duration;
     use tokio::sync::mpsc;
+
+    #[test]
+    fn every_game_fits_in_a_room() {
+        for game in GAMES.iter() {
+            assert!(
+                game.max_players <= MAX_ROOM_PLAYERS,
+                "{} needs more seats",
+                game.id
+            );
+        }
+    }
 
     // Messages sent to it are dropped, tests here don't read them
     fn test_sender() -> UnboundedSender<ServerMessage> {
