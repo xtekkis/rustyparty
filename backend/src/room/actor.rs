@@ -688,10 +688,15 @@ fn send(connection: &Connection, message: ServerMessage) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::games::Game;
     use crate::games::GameInfo;
+    use crate::games::bad_takes::{BadTakes, JUDGE_DURATION, REVEAL_DURATION, answer_ids, deck};
     use crate::games::dummy::{DUMMY_INFO, DummyGame};
+    use crate::protocol::RoomSettings;
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
     use serde_json::json;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, HashSet};
     use tokio::sync::mpsc::UnboundedReceiver;
 
     // Join a player and return their id and the messages their phone gets
@@ -737,32 +742,25 @@ mod tests {
         }
     }
 
+    // Everything this phone has been sent since it was last read
+    fn drain(messages: &mut UnboundedReceiver<ServerMessage>) -> Vec<ServerMessage> {
+        std::iter::from_fn(|| messages.try_recv().ok()).collect()
+    }
+
     // The last game event this phone got
     fn last_game_event(messages: &mut UnboundedReceiver<ServerMessage>) -> Option<Value> {
-        let mut last = None;
-        while let Ok(message) = messages.try_recv() {
-            if let ServerMessage::GameEvent { event } = message {
-                last = Some(event);
-            }
-        }
-        last
+        game_messages(messages).0.pop()
     }
 
     // The last game view this phone got
     fn last_game_view(messages: &mut UnboundedReceiver<ServerMessage>) -> Option<Value> {
-        let mut last = None;
-        while let Ok(message) = messages.try_recv() {
-            if let ServerMessage::GameView { view } = message {
-                last = Some(view);
-            }
-        }
-        last
+        Some(game_messages(messages).1).filter(|view| !view.is_null())
     }
 
     // The game events this phone got, and the last view
     fn game_messages(messages: &mut UnboundedReceiver<ServerMessage>) -> (Vec<Value>, Value) {
         let (mut events, mut view) = (Vec::new(), Value::Null);
-        while let Ok(message) = messages.try_recv() {
+        for message in drain(messages) {
             match message {
                 ServerMessage::GameEvent { event } => events.push(event),
                 ServerMessage::GameView { view: latest } => view = latest,
@@ -770,6 +768,23 @@ mod tests {
             }
         }
         (events, view)
+    }
+
+    // Bad Takes dealt from a seeded deck, so the room tests get the same cards every run
+    fn bad_takes() -> GameInfo {
+        fn create(settings: &RoomSettings) -> Box<dyn Game> {
+            let cards = deck::starter_deck();
+            Box::new(BadTakes::new(
+                settings.points_to_win,
+                cards.prompts.clone(),
+                cards.answers.clone(),
+                StdRng::seed_from_u64(1),
+            ))
+        }
+        GameInfo {
+            create,
+            ..crate::games::bad_takes::info()
+        }
     }
 
     fn full_room() -> (Room, Vec<UnboundedReceiver<ServerMessage>>) {
@@ -819,7 +834,7 @@ mod tests {
         let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
         let (commands, mut reminders) = mpsc::channel(16);
         let me = commands.downgrade();
-        room.start_game(&crate::games::bad_takes::info(), &me);
+        room.start_game(&bad_takes(), &me);
 
         // Everyone gets 7 cards, Alex judges, and they all see the same prompt
         let views: Vec<Value> = phones
@@ -858,7 +873,7 @@ mod tests {
         assert_eq!(kim_sees["scores"][&winner], 1);
 
         // After the reveal the next round starts: Sam judges and every hand is full again
-        tokio::time::sleep(Duration::from_secs(10)).await;
+        tokio::time::sleep(REVEAL_DURATION + Duration::from_secs(1)).await;
         while let Ok(reminder) = reminders.try_recv() {
             room.handle(reminder, &me);
         }
@@ -890,14 +905,14 @@ mod tests {
         let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
         let (commands, mut reminders) = mpsc::channel(16);
         let me = commands.downgrade();
-        room.start_game(&crate::games::bad_takes::info(), &me);
+        room.start_game(&bad_takes(), &me);
         for player_id in [2, 3] {
             let (_, view) = game_messages(&mut phones[player_id as usize - 1]);
             play_first_cards(&mut room, player_id, &view, &me);
         }
 
-        // Alex never picks, so after 45 seconds a random answer wins
-        tokio::time::sleep(Duration::from_secs(46)).await;
+        // Alex never picks, so once the judge's time is up a random answer wins
+        tokio::time::sleep(JUDGE_DURATION + Duration::from_secs(1)).await;
         while let Ok(reminder) = reminders.try_recv() {
             room.handle(reminder, &me);
         }
@@ -915,7 +930,7 @@ mod tests {
         let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim", "Lee"]);
         let (commands, _reminders) = mpsc::channel(16);
         let me = commands.downgrade();
-        room.start_game(&crate::games::bad_takes::info(), &me);
+        room.start_game(&bad_takes(), &me);
         let (_, sam_sees) = game_messages(&mut phones[1]);
         let sams_cards = play_first_cards(&mut room, 2, &sam_sees, &me);
 
@@ -938,20 +953,21 @@ mod tests {
         assert_eq!(view["scores"], json!({ "2": 0, "3": 0, "4": 0 }));
     }
 
-    // Add everything this phone got to its log, as the JSON it would see, and return the
-    // last game view if there was one
-    fn read_phone(
-        messages: &mut UnboundedReceiver<ServerMessage>,
-        log: &mut String,
-    ) -> Option<Value> {
-        let mut view = None;
-        while let Ok(message) = messages.try_recv() {
-            log.push_str(&serde_json::to_string(&message).expect("messages are JSON"));
-            if let ServerMessage::GameView { view: latest } = message {
-                view = Some(latest);
+    // Note the answer cards in everything each phone got, and keep its last view
+    fn read_all(
+        phones: &mut [UnboundedReceiver<ServerMessage>],
+        seen: &mut [HashSet<u64>],
+        views: &mut [Value],
+    ) {
+        for (index, phone) in phones.iter_mut().enumerate() {
+            for message in drain(phone) {
+                let json = serde_json::to_value(&message).expect("messages are JSON");
+                answer_ids(&json, &mut seen[index]);
+                if let ServerMessage::GameView { view } = message {
+                    views[index] = view;
+                }
             }
         }
-        view
     }
 
     #[tokio::test(start_paused = true)]
@@ -959,43 +975,35 @@ mod tests {
         let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim", "Lee"]);
         let (commands, mut reminders) = mpsc::channel(16);
         let me = commands.downgrade();
-        let mut logs = vec![String::new(); phones.len()];
+        // Every answer card each phone was ever sent, and the last view it got
+        let mut seen = vec![HashSet::new(); phones.len()];
         let mut views = vec![Value::Null; phones.len()];
-        let mut read_all = |phones: &mut Vec<UnboundedReceiver<ServerMessage>>| {
-            for (index, phone) in phones.iter_mut().enumerate() {
-                if let Some(view) = read_phone(phone, &mut logs[index]) {
-                    views[index] = view;
-                }
-            }
-            (views.clone(), logs.clone())
-        };
 
         // A whole round and the start of the next: deal, play, judge, reveal, refill
-        room.start_game(&crate::games::bad_takes::info(), &me);
-        let (seen, _) = read_all(&mut phones);
+        room.start_game(&bad_takes(), &me);
+        read_all(&mut phones, &mut seen, &mut views);
         for player_id in [2, 3, 4] {
-            play_first_cards(&mut room, player_id, &seen[player_id as usize - 1], &me);
+            play_first_cards(&mut room, player_id, &views[player_id as usize - 1], &me);
         }
-        let (seen, _) = read_all(&mut phones);
-        let picked = seen[0]["cards_to_judge"][0][0]["id"].clone();
+        read_all(&mut phones, &mut seen, &mut views);
+        let picked = views[0]["cards_to_judge"][0][0]["id"].clone();
         room.game_action(1, json!({ "kind": "pick", "card": picked }), &me);
-        tokio::time::sleep(Duration::from_secs(10)).await;
+        tokio::time::sleep(REVEAL_DURATION + Duration::from_secs(1)).await;
         while let Ok(reminder) = reminders.try_recv() {
             room.handle(reminder, &me);
         }
-        let (seen, logs) = read_all(&mut phones);
-        assert_eq!(seen[0]["round"], 2);
+        read_all(&mut phones, &mut seen, &mut views);
+        assert_eq!(views[0]["round"], 2);
 
         // No card still in someone's hand ever reached another phone
-        for (owner, view) in seen.iter().enumerate() {
+        for (owner, view) in views.iter().enumerate() {
             for card in view["hand"].as_array().expect("a hand") {
-                let text = serde_json::to_string(&card["text"]).expect("text");
-                for (reader, log) in logs.iter().enumerate() {
+                let id = card["id"].as_u64().expect("a card id");
+                for (reader, cards) in seen.iter().enumerate() {
                     if reader != owner {
-                        assert!(!log.contains(&text), "phone {reader} saw {text}");
+                        assert!(!cards.contains(&id), "phone {reader} got {}", card["text"]);
                     }
                 }
-                assert!(logs[owner].contains(&text), "the owner sees their own card");
             }
         }
     }

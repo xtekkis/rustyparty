@@ -33,8 +33,8 @@ enum Timer {
 const SUBMIT_DURATION: Duration = Duration::from_secs(60);
 // The winning card, then the scores going up, before the next round or the final results
 // How long the judge has to pick, before a random answer wins
-const JUDGE_DURATION: Duration = Duration::from_secs(45);
-const REVEAL_DURATION: Duration = Duration::from_secs(9);
+pub(crate) const JUDGE_DURATION: Duration = Duration::from_secs(45);
+pub(crate) const REVEAL_DURATION: Duration = Duration::from_secs(9);
 
 // The registry entry, built at startup because the player limit depends on the deck
 pub fn info() -> GameInfo {
@@ -526,6 +526,29 @@ impl Game for BadTakes {
 
     fn is_finished(&self) -> bool {
         self.phase == Phase::GameOver
+    }
+}
+
+// Ids of every answer card in a message, for tests that check hands stay private.
+// Answer cards are {"id", "text"} objects, prompts have a "pick" as well, so they're left out
+#[cfg(test)]
+pub(crate) fn answer_ids(value: &Value, ids: &mut HashSet<u64>) {
+    match value {
+        Value::Object(fields) => {
+            let is_answer = fields.contains_key("text") && !fields.contains_key("pick");
+            if let (true, Some(id)) = (is_answer, fields.get("id").and_then(Value::as_u64)) {
+                ids.insert(id);
+            }
+            for field in fields.values() {
+                answer_ids(field, ids);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                answer_ids(item, ids);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1466,28 +1489,6 @@ mod tests {
 
         for card in &game.discard {
             assert!(game.hands.values().flatten().all(|held| held != card));
-        }
-    }
-
-    // Ids of every answer card in a message. Answer cards are {"id", "text"} objects,
-    // prompts have a "pick" as well, so they're left out
-    fn answer_ids(value: &Value, ids: &mut HashSet<u64>) {
-        match value {
-            Value::Object(fields) => {
-                let is_answer = fields.contains_key("text") && !fields.contains_key("pick");
-                if let (true, Some(id)) = (is_answer, fields.get("id").and_then(Value::as_u64)) {
-                    ids.insert(id);
-                }
-                for field in fields.values() {
-                    answer_ids(field, ids);
-                }
-            }
-            Value::Array(items) => {
-                for item in items {
-                    answer_ids(item, ids);
-                }
-            }
-            _ => {}
         }
     }
 
