@@ -63,11 +63,13 @@ fn create(settings: &RoomSettings) -> Box<dyn Game> {
     ))
 }
 
-// What players can do, sent as {"kind": "submit", ...} or {"kind": "pick", ...}
+// What players can do, sent as {"kind": "submit", ...}, {"kind": "flip"} or {"kind": "pick", ...}
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum Action {
     Submit { cards: Vec<CardId> },
+    // The judge turns the next answer face up
+    Flip,
     // The judge points at any card of their favorite answer
     Pick { card: CardId },
 }
@@ -99,6 +101,8 @@ pub struct BadTakes {
     submissions: HashMap<PlayerId, Vec<AnswerCard>>,
     // The order the judge reads the cards in, never sent to anyone
     reading_order: Vec<PlayerId>,
+    // How many answers the judge has turned face up, from the start of the reading order
+    flipped: usize,
     // Whose cards the judge picked, kept secret until the reveal
     winner: Option<PlayerId>,
     phase: Phase,
@@ -130,6 +134,7 @@ impl BadTakes {
             prompt: None,
             submissions: HashMap::new(),
             reading_order: Vec::new(),
+            flipped: 0,
             winner: None,
             phase: Phase::Submitting,
             rng,
@@ -155,6 +160,7 @@ impl BadTakes {
             self.deal_to(player);
         }
         self.reading_order.clear();
+        self.flipped = 0;
         self.winner = None;
         self.judge = self.next_judge();
         // Last round's prompt is used up. Out of prompts, the used ones become a new deck
@@ -284,14 +290,53 @@ impl BadTakes {
             .filter(|&&player| Some(player) != self.judge)
             .all(|player| self.submissions.contains_key(player));
         if everyone_played {
+            self.start_reading(ctx);
+        }
+    }
+
+    // The answers go on the table face down, for the judge to flip one at a time
+    fn start_reading(&mut self, ctx: &mut GameCtx) {
+        // Shuffled, so the judge can't tell whose cards came in first
+        self.reading_order = self.submitted_players();
+        self.reading_order.shuffle(&mut self.rng);
+        self.phase = Phase::Reading;
+        ctx.broadcast(json!({
+            "event": "reading_started",
+            "answers": self.reading_order.len(),
+        }));
+    }
+
+    fn flip(&mut self, player: PlayerId, ctx: &mut GameCtx) -> Result<(), GameError> {
+        if self.phase != Phase::Reading {
+            return Err(GameError {
+                code: "not_reading",
+                message: "There's nothing to flip right now",
+            });
+        }
+        if self.judge != Some(player) {
+            return Err(GameError {
+                code: "not_the_judge",
+                message: "Only the judge flips the answers",
+            });
+        }
+        self.flip_next(ctx);
+        Ok(())
+    }
+
+    // Everyone sees the next answer at the same time, while the judge reads it out loud
+    fn flip_next(&mut self, ctx: &mut GameCtx) {
+        let next = self.reading_order.get(self.flipped);
+        if let Some(cards) = next.and_then(|player| self.submissions.get(player)) {
+            ctx.broadcast(json!({ "event": "answer_flipped", "cards": cards }));
+            self.flipped += 1;
+        }
+        // Every answer is face up, so the judge can pick
+        if self.flipped >= self.reading_order.len() {
             self.start_judging(ctx);
         }
     }
 
     fn start_judging(&mut self, ctx: &mut GameCtx) {
-        // Shuffled, so the judge can't tell whose cards came in first
-        self.reading_order = self.submitted_players();
-        self.reading_order.shuffle(&mut self.rng);
         self.phase = Phase::Judging;
         ctx.broadcast(json!({
             "event": "judging_started",
@@ -305,7 +350,7 @@ impl BadTakes {
         if self.submissions.is_empty() {
             self.skip_round(ctx);
         } else {
-            self.start_judging(ctx);
+            self.start_reading(ctx);
         }
     }
 
@@ -407,10 +452,11 @@ impl BadTakes {
         players
     }
 
-    // The played cards in reading order, with nothing to say whose they are
+    // The answers face up so far, in reading order, with nothing to say whose they are
     fn cards_to_judge(&self) -> Vec<&Vec<AnswerCard>> {
         self.reading_order
             .iter()
+            .take(self.flipped)
             .filter_map(|player| self.submissions.get(player))
             .collect()
     }
@@ -456,6 +502,7 @@ impl Game for BadTakes {
         };
         match action {
             Action::Submit { cards } => self.submit(player, cards, ctx),
+            Action::Flip => self.flip(player, ctx),
             Action::Pick { card } => self.pick(player, card, ctx),
         }
     }
@@ -496,10 +543,14 @@ impl Game for BadTakes {
             return;
         }
 
-        let mid_round = matches!(self.phase, Phase::Submitting | Phase::Judging);
+        let mid_round = matches!(
+            self.phase,
+            Phase::Submitting | Phase::Reading | Phase::Judging
+        );
+        let answers_out = matches!(self.phase, Phase::Reading | Phase::Judging);
         if mid_round && self.judge == Some(player) {
             self.cancel_round(ctx);
-        } else if self.phase == Phase::Judging && self.reading_order.is_empty() {
+        } else if answers_out && self.reading_order.is_empty() {
             // The last answer on the table left with its player
             self.skip_round(ctx);
         }
@@ -520,6 +571,7 @@ impl Game for BadTakes {
             "submitted": self.submitted_players(),
             "my_submission": self.submissions.get(&player),
             "cards_to_judge": self.cards_to_judge(),
+            "face_down": self.reading_order.len().saturating_sub(self.flipped),
             "winner": self.winner,
         })
     }
@@ -779,8 +831,30 @@ mod tests {
         }
     }
 
+    // The judge turns the next answer face up
+    fn flip(game: &mut BadTakes, player: PlayerId) -> Result<GameCtx, GameError> {
+        let mut ctx = GameCtx::default();
+        game.handle_action(player, json!({ "kind": "flip" }), &mut ctx)?;
+        Ok(ctx)
+    }
+
+    // The judge flips every answer still face down
+    fn flip_all(game: &mut BadTakes, ctx: &mut GameCtx) {
+        let judge = game.judge.expect("a round has a judge");
+        while game.phase == Phase::Reading {
+            game.handle_action(judge, json!({ "kind": "flip" }), ctx)
+                .unwrap();
+        }
+    }
+
+    // Everyone plays, then the judge flips every answer, ready to pick
+    fn answers_face_up(game: &mut BadTakes, ctx: &mut GameCtx) {
+        everyone_submits(game, ctx);
+        flip_all(game, ctx);
+    }
+
     #[test]
-    fn judging_starts_when_everyone_has_played() {
+    fn answers_go_face_down_when_everyone_has_played() {
         let mut game = started_game(&[1, 2, 3]);
         let card = game.hands[&2][0].id;
         submit(&mut game, 2, &[card]).unwrap();
@@ -788,18 +862,104 @@ mod tests {
 
         let card = game.hands[&3][0].id;
         let ctx = submit(&mut game, 3, &[card]).unwrap();
-        assert_eq!(game.phase, Phase::Judging);
+        assert_eq!(game.phase, Phase::Reading);
         assert_eq!(
             ctx.outgoing.last().map(|outgoing| &outgoing.message),
-            Some(&json!({ "event": "judging_started", "judge_for": 45 }))
+            Some(&json!({ "event": "reading_started", "answers": 2 }))
         );
-        assert_eq!(game.view_for(1)["phase"], "judging");
+        assert!(
+            ctx.timers.is_empty(),
+            "the pick timer waits for the last flip"
+        );
+        let view = game.view_for(1);
+        assert_eq!(view["phase"], "reading");
+        assert_eq!(view["cards_to_judge"], json!([]));
+        assert_eq!(view["face_down"], 2);
+    }
+
+    #[test]
+    fn the_judge_flips_the_answers_one_at_a_time() {
+        let mut game = started_game(&[1, 2, 3, 4]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+
+        let first = game.submissions[&game.reading_order[0]].clone();
+        let ctx = flip(&mut game, 1).unwrap();
+        assert_eq!(ctx.outgoing.len(), 1);
+        assert_eq!(ctx.outgoing[0].to, Recipient::Everyone);
+        assert_eq!(
+            ctx.outgoing[0].message,
+            json!({ "event": "answer_flipped", "cards": first })
+        );
+        for player in [1, 2, 3, 4] {
+            let view = game.view_for(player);
+            assert_eq!(view["cards_to_judge"], json!([first]));
+            assert_eq!(view["face_down"], 2);
+        }
+        assert_eq!(game.phase, Phase::Reading, "two answers to go");
+    }
+
+    #[test]
+    fn the_pick_timer_starts_after_the_last_flip() {
+        let mut game = started_game(&[1, 2, 3]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+        flip(&mut game, 1).unwrap();
+
+        let last = game.submissions[&game.reading_order[1]].clone();
+        let ctx = flip(&mut game, 1).unwrap();
+        assert_eq!(game.phase, Phase::Judging);
+        let messages: Vec<&Value> = ctx
+            .outgoing
+            .iter()
+            .map(|outgoing| &outgoing.message)
+            .collect();
+        assert_eq!(
+            messages,
+            [
+                &json!({ "event": "answer_flipped", "cards": last }),
+                &json!({ "event": "judging_started", "judge_for": 45 }),
+            ]
+        );
+        assert_eq!(ctx.timers, [(game.timer_id(Timer::Judge), JUDGE_DURATION)]);
+        assert_eq!(game.view_for(2)["face_down"], 0);
+    }
+
+    #[test]
+    fn only_the_judge_can_flip() {
+        let mut game = started_game(&[1, 2, 3]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+
+        let result = flip(&mut game, 2);
+        assert_eq!(result.err().map(|error| error.code), Some("not_the_judge"));
+        assert_eq!(game.flipped, 0);
+    }
+
+    #[test]
+    fn nothing_to_flip_outside_the_reading() {
+        let mut game = started_game(&[1, 2, 3]);
+        let before = flip(&mut game, 1);
+        assert_eq!(before.err().map(|error| error.code), Some("not_reading"));
+
+        answers_face_up(&mut game, &mut GameCtx::default());
+        let after = flip(&mut game, 1);
+        assert_eq!(after.err().map(|error| error.code), Some("not_reading"));
+    }
+
+    #[test]
+    fn no_picking_until_every_answer_is_face_up() {
+        let mut game = started_game(&[1, 2, 3]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+        flip(&mut game, 1).unwrap();
+
+        let face_up = game.submissions[&game.reading_order[0]][0].id;
+        let result = pick(&mut game, 1, face_up);
+        assert_eq!(result.err().map(|error| error.code), Some("not_judging"));
+        assert_eq!(game.winner, None);
     }
 
     #[test]
     fn no_cards_once_judging_has_started() {
         let mut game = started_game(&[1, 2, 3, 4]);
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
         assert_eq!(game.phase, Phase::Judging);
 
         // Nobody can play now, not even someone who somehow still could
@@ -820,7 +980,7 @@ mod tests {
 
         let mut ctx = GameCtx::default();
         game.player_left(4, &mut ctx);
-        assert_eq!(game.phase, Phase::Judging);
+        assert_eq!(game.phase, Phase::Reading);
     }
 
     #[test]
@@ -845,7 +1005,7 @@ mod tests {
     #[test]
     fn everyone_sees_the_cards_but_not_whose_they_are() {
         let mut game = started_game(&[1, 2, 3, 4]);
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
 
         let in_reading_order: Vec<_> = game
             .reading_order
@@ -865,7 +1025,7 @@ mod tests {
     fn the_reading_order_is_shuffled() {
         let players: Vec<PlayerId> = (1..=8).collect();
         let mut game = started_game(&players);
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
 
         let mut sorted = game.reading_order.clone();
         sorted.sort();
@@ -880,7 +1040,7 @@ mod tests {
     #[test]
     fn a_leaver_drops_out_of_the_reading_order() {
         let mut game = started_game(&[1, 2, 3, 4]);
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
 
         game.player_left(3, &mut GameCtx::default());
         assert!(!game.reading_order.contains(&3));
@@ -896,7 +1056,7 @@ mod tests {
     #[test]
     fn the_judge_picks_a_winner() {
         let mut game = started_game(&[1, 2, 3, 4]);
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
 
         let kims_card = game.submissions[&3][0].id;
         pick(&mut game, 1, kims_card).unwrap();
@@ -922,7 +1082,7 @@ mod tests {
     #[test]
     fn the_winner_gets_a_point_and_everyone_is_told() {
         let mut game = started_game(&[1, 2, 3, 4]);
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
         assert_eq!(
             game.view_for(2)["winner"],
             json!(null),
@@ -955,7 +1115,7 @@ mod tests {
     fn points_add_up_across_rounds() {
         let mut game = started_game(&[1, 2, 3]);
         game.scores.insert(2, 4);
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
 
         let sams_card = game.submissions[&2][0].id;
         let ctx = pick(&mut game, 1, sams_card).unwrap();
@@ -967,7 +1127,7 @@ mod tests {
     fn reaching_the_points_to_win_ends_the_game() {
         let mut game = started_game(&[1, 2, 3]);
         game.scores.insert(2, 6);
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
 
         let sams_card = game.submissions[&2][0].id;
         let ctx = pick(&mut game, 1, sams_card).unwrap();
@@ -994,7 +1154,7 @@ mod tests {
     fn one_point_short_keeps_the_game_going() {
         let mut game = started_game(&[1, 2, 3]);
         game.scores.insert(2, 5);
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
 
         let sams_card = game.submissions[&2][0].id;
         let ctx = pick(&mut game, 1, sams_card).unwrap();
@@ -1011,7 +1171,7 @@ mod tests {
         game.points_to_win = 3;
         // Whoever is read first wins each round, until someone has 3
         while !game.is_finished() {
-            everyone_submits(&mut game, &mut GameCtx::default());
+            answers_face_up(&mut game, &mut GameCtx::default());
             finish_round(&mut game);
         }
         assert_eq!(game.scores.values().max(), Some(&3));
@@ -1045,7 +1205,7 @@ mod tests {
         game.player_left(3, &mut GameCtx::default());
         assert!(!game.is_finished());
 
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
         finish_round(&mut game);
         assert_eq!(game.players, [1, 2, 4]);
     }
@@ -1073,7 +1233,7 @@ mod tests {
     #[test]
     fn the_reveal_lasts_nine_seconds() {
         let mut game = started_game(&[1, 2, 3]);
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
         let sams_card = game.submissions[&2][0].id;
 
         let ctx = pick(&mut game, 1, sams_card).unwrap();
@@ -1086,7 +1246,7 @@ mod tests {
     #[test]
     fn the_next_round_starts_after_the_reveal() {
         let mut game = started_game(&[1, 2, 3]);
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
         let sams_card = game.submissions[&2][0].id;
         pick(&mut game, 1, sams_card).unwrap();
 
@@ -1110,8 +1270,9 @@ mod tests {
         assert!(ctx.outgoing.is_empty());
     }
 
-    // The judge picks the first answer they read, then the reveal runs out
+    // The judge flips every answer, picks the first, then the reveal runs out
     fn finish_round(game: &mut BadTakes) {
+        flip_all(game, &mut GameCtx::default());
         let first = game.reading_order[0];
         let card = game.submissions[&first][0].id;
         let judge = game.judge.expect("a round has a judge");
@@ -1124,7 +1285,7 @@ mod tests {
         let mut game = started_game(&[4, 2, 9]);
         let mut judges = vec![game.judge];
         for _ in 0..3 {
-            everyone_submits(&mut game, &mut GameCtx::default());
+            answers_face_up(&mut game, &mut GameCtx::default());
             finish_round(&mut game);
             judges.push(game.judge);
         }
@@ -1134,7 +1295,7 @@ mod tests {
     #[test]
     fn everyone_hears_who_the_new_judge_is() {
         let mut game = started_game(&[1, 2, 3]);
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
         let sams_card = game.submissions[&2][0].id;
         pick(&mut game, 1, sams_card).unwrap();
 
@@ -1148,7 +1309,7 @@ mod tests {
     fn a_leaver_is_skipped_in_the_rotation() {
         let mut game = started_game(&[1, 2, 3, 4]);
         game.player_left(2, &mut GameCtx::default());
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
         finish_round(&mut game);
         assert_eq!(game.judge, Some(3));
     }
@@ -1165,7 +1326,7 @@ mod tests {
         assert_eq!(result.err().map(|error| error.code), Some("not_playing"));
 
         // The round doesn't wait for them either
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
         assert_eq!(game.phase, Phase::Judging);
     }
 
@@ -1173,7 +1334,7 @@ mod tests {
     fn a_late_joiner_is_dealt_in_at_the_next_round() {
         let mut game = started_game(&[1, 2, 3]);
         game.player_joined(4, &mut GameCtx::default());
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
         finish_round(&mut game);
 
         assert_eq!(game.hands[&4].len(), HAND_SIZE);
@@ -1188,7 +1349,7 @@ mod tests {
         game.player_joined(4, &mut GameCtx::default());
         let mut judges = vec![game.judge];
         for _ in 0..4 {
-            everyone_submits(&mut game, &mut GameCtx::default());
+            answers_face_up(&mut game, &mut GameCtx::default());
             finish_round(&mut game);
             judges.push(game.judge);
         }
@@ -1200,13 +1361,13 @@ mod tests {
         let mut game = started_game(&[1, 2, 3, 4]);
         game.max_players = 4;
         game.player_joined(5, &mut GameCtx::default());
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
         finish_round(&mut game);
         assert_eq!(game.waiting, [5], "no free seat yet");
 
         // A seat frees up, and they take it at the next round
         game.player_left(3, &mut GameCtx::default());
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
         finish_round(&mut game);
         assert_eq!(game.players, [1, 2, 4, 5]);
         assert_eq!(game.hands[&5].len(), HAND_SIZE);
@@ -1217,7 +1378,7 @@ mod tests {
         let mut game = started_game(&[1, 2, 3]);
         game.player_joined(4, &mut GameCtx::default());
         game.player_left(4, &mut GameCtx::default());
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
         finish_round(&mut game);
 
         assert_eq!(game.players, [1, 2, 3]);
@@ -1232,18 +1393,18 @@ mod tests {
 
         let mut ctx = GameCtx::default();
         game.handle_timer(game.timer_id(Timer::Submit), &mut ctx);
-        assert_eq!(game.phase, Phase::Judging);
+        assert_eq!(game.phase, Phase::Reading);
         assert_eq!(game.reading_order, [2], "Kim and Lee sit this round out");
         assert_eq!(
             ctx.outgoing[0].message,
-            json!({ "event": "judging_started", "judge_for": 45 })
+            json!({ "event": "reading_started", "answers": 1 })
         );
     }
 
     #[test]
     fn time_up_after_everyone_has_played_changes_nothing() {
         let mut game = started_game(&[1, 2, 3]);
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
         let order = game.reading_order.clone();
 
         let mut ctx = GameCtx::default();
@@ -1256,7 +1417,7 @@ mod tests {
     fn a_timer_from_an_earlier_round_is_ignored() {
         let mut game = started_game(&[1, 2, 3]);
         let round_one_timer = game.timer_id(Timer::Submit);
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
         finish_round(&mut game);
 
         // Round 1's timer runs out while round 2 is being played
@@ -1272,7 +1433,7 @@ mod tests {
     fn the_judge_has_45_seconds() {
         let mut game = started_game(&[1, 2, 3]);
         let mut ctx = GameCtx::default();
-        everyone_submits(&mut game, &mut ctx);
+        answers_face_up(&mut game, &mut ctx);
         assert_eq!(
             ctx.timers,
             [(game.timer_id(Timer::Judge), Duration::from_secs(45))]
@@ -1282,7 +1443,7 @@ mod tests {
     #[test]
     fn a_slow_judge_gives_the_point_to_a_random_answer() {
         let mut game = started_game(&[1, 2, 3, 4]);
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
 
         let mut ctx = GameCtx::default();
         game.handle_timer(game.timer_id(Timer::Judge), &mut ctx);
@@ -1300,7 +1461,7 @@ mod tests {
     #[test]
     fn a_pick_in_time_beats_the_judge_timer() {
         let mut game = started_game(&[1, 2, 3]);
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
         let sams_card = game.submissions[&2][0].id;
         pick(&mut game, 1, sams_card).unwrap();
 
@@ -1381,14 +1542,14 @@ mod tests {
     #[test]
     fn the_player_after_a_leaving_judge_judges_next() {
         let mut game = started_game(&[1, 2, 3, 4]);
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
         finish_round(&mut game);
         assert_eq!(game.judge, Some(2));
 
         game.player_left(2, &mut GameCtx::default());
         let mut judges = vec![game.judge];
         for _ in 0..3 {
-            everyone_submits(&mut game, &mut GameCtx::default());
+            answers_face_up(&mut game, &mut GameCtx::default());
             finish_round(&mut game);
             judges.push(game.judge);
         }
@@ -1398,7 +1559,7 @@ mod tests {
     #[test]
     fn a_judge_leaving_during_the_reveal_keeps_the_point() {
         let mut game = started_game(&[1, 2, 3, 4]);
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
         let sams_card = game.submissions[&2][0].id;
         pick(&mut game, 1, sams_card).unwrap();
 
@@ -1436,7 +1597,7 @@ mod tests {
         while let Some(card) = game.answers.draw() {
             game.discard.push(card);
         }
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
         finish_round(&mut game);
 
         for player in [1, 2, 3] {
@@ -1450,7 +1611,7 @@ mod tests {
     #[test]
     fn the_deck_is_only_reshuffled_once_it_runs_out() {
         let mut game = started_game(&[1, 2, 3]);
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
         finish_round(&mut game);
 
         assert_eq!(game.discard.len(), 2, "last round's cards wait in the pile");
@@ -1484,7 +1645,7 @@ mod tests {
     #[test]
     fn played_cards_are_not_dealt_again() {
         let mut game = started_game(&[1, 2, 3]);
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
         finish_round(&mut game);
 
         for card in &game.discard {
@@ -1549,7 +1710,7 @@ mod tests {
 
         // Everyone plays and the judge runs out of time
         let mut ctx = GameCtx::default();
-        everyone_submits(&mut game, &mut ctx);
+        answers_face_up(&mut game, &mut ctx);
         assert_hands_private(&game, &ctx);
         let mut ctx = GameCtx::default();
         game.handle_timer(game.timer_id(Timer::Judge), &mut ctx);
@@ -1572,7 +1733,7 @@ mod tests {
 
         // A normal round: everyone plays and the judge picks
         let mut ctx = GameCtx::default();
-        everyone_submits(&mut game, &mut ctx);
+        answers_face_up(&mut game, &mut ctx);
         assert_hands_private(&game, &ctx);
         let judge = game.judge.expect("a judge");
         let card = game.submissions[&game.reading_order[0]][0].id;
@@ -1591,7 +1752,7 @@ mod tests {
     #[test]
     fn played_cards_stay_on_the_table_for_the_reveal() {
         let mut game = started_game(&[1, 2, 3]);
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
         let sams_card = game.submissions[&2][0].id;
         pick(&mut game, 1, sams_card).unwrap();
 
@@ -1602,7 +1763,7 @@ mod tests {
     #[test]
     fn played_cards_are_discarded_when_the_next_round_starts() {
         let mut game = started_game(&[1, 2, 3]);
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
         let played: HashSet<CardId> = game
             .submissions
             .values()
@@ -1644,6 +1805,7 @@ mod tests {
             submit(&mut game, player, &cards).unwrap();
         }
 
+        flip_all(&mut game, &mut GameCtx::default());
         let sams_second_card = game.submissions[&2][1].id;
         pick(&mut game, 1, sams_second_card).unwrap();
         assert_eq!(game.winner, Some(2));
@@ -1652,7 +1814,7 @@ mod tests {
     #[test]
     fn only_the_judge_can_pick() {
         let mut game = started_game(&[1, 2, 3]);
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
 
         let own_card = game.submissions[&2][0].id;
         let result = pick(&mut game, 2, own_card);
@@ -1675,7 +1837,7 @@ mod tests {
     #[test]
     fn the_judge_can_only_pick_a_played_card() {
         let mut game = started_game(&[1, 2, 3]);
-        everyone_submits(&mut game, &mut GameCtx::default());
+        answers_face_up(&mut game, &mut GameCtx::default());
 
         // A card still in Sam's hand, and one from the judge's own hand
         for card in [game.hands[&2][0].id, game.hands[&1][0].id] {

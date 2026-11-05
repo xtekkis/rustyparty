@@ -855,7 +855,15 @@ mod tests {
             room.game_action(player_id, json!({ "kind": "submit", "cards": cards }), &me);
         }
 
-        // Alex reads both answers, with no names, and picks the first
+        // The answers go face down, and Alex flips them one at a time
+        let (_, alex_sees) = game_messages(&mut phones[0]);
+        assert_eq!(alex_sees["phase"], "reading");
+        assert_eq!(alex_sees["face_down"], 2);
+        for _ in 0..2 {
+            room.game_action(1, json!({ "kind": "flip" }), &me);
+        }
+
+        // Alex has read both answers, with no names, and picks the first
         let (_, alex_sees) = game_messages(&mut phones[0]);
         assert_eq!(alex_sees["phase"], "judging");
         let answers = alex_sees["cards_to_judge"].as_array().expect("answers");
@@ -911,7 +919,10 @@ mod tests {
             play_first_cards(&mut room, player_id, &view, &me);
         }
 
-        // Alex never picks, so once the judge's time is up a random answer wins
+        // Alex flips both answers but never picks, so a random answer wins when time is up
+        for _ in 0..2 {
+            room.game_action(1, json!({ "kind": "flip" }), &me);
+        }
         tokio::time::sleep(JUDGE_DURATION + Duration::from_secs(1)).await;
         while let Ok(reminder) = reminders.try_recv() {
             room.handle(reminder, &me);
@@ -979,11 +990,14 @@ mod tests {
         let mut seen = vec![HashSet::new(); phones.len()];
         let mut views = vec![Value::Null; phones.len()];
 
-        // A whole round and the start of the next: deal, play, judge, reveal, refill
+        // A whole round and the start of the next: deal, play, flip, judge, reveal, refill
         room.start_game(&bad_takes(), &me);
         read_all(&mut phones, &mut seen, &mut views);
         for player_id in [2, 3, 4] {
             play_first_cards(&mut room, player_id, &views[player_id as usize - 1], &me);
+        }
+        for _ in 0..3 {
+            room.game_action(1, json!({ "kind": "flip" }), &me);
         }
         read_all(&mut phones, &mut seen, &mut views);
         let picked = views[0]["cards_to_judge"][0][0]["id"].clone();
