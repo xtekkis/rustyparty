@@ -9,3 +9,6 @@ target/
 
 # Claude Code
 .claude/
+
+# Design kit from Claude Design
+design-kit/
