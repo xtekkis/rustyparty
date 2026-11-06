@@ -63,13 +63,15 @@ fn create(settings: &RoomSettings) -> Box<dyn Game> {
     ))
 }
 
-// What players can do, sent as {"kind": "submit", ...}, {"kind": "pull"} or {"kind": "pick", ...}
+// What players can do, sent as {"kind": "submit", ...}, {"kind": "pull"} and so on
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum Action {
     Submit { cards: Vec<CardId> },
     // The judge pulls the next answer out of the bag
     Pull,
+    // The judge shows every answer together, once the bag is empty
+    ShowAll,
     // The judge points at any card of their favorite answer
     Pick { card: CardId },
 }
@@ -306,21 +308,50 @@ impl BadTakes {
         }));
     }
 
-    fn pull(&mut self, player: PlayerId, ctx: &mut GameCtx) -> Result<(), GameError> {
+    // Pulling and showing the cards are for the judge, while the answers are being read
+    fn check_judge_is_reading(&self, player: PlayerId) -> Result<(), GameError> {
         if self.phase != Phase::Reading {
             return Err(GameError {
                 code: "not_reading",
-                message: "There's nothing to pull right now",
+                message: "The answers aren't being read right now",
             });
         }
         if self.judge != Some(player) {
             return Err(GameError {
                 code: "not_the_judge",
-                message: "Only the judge pulls the cards out",
+                message: "Only the judge handles the cards",
+            });
+        }
+        Ok(())
+    }
+
+    fn pull(&mut self, player: PlayerId, ctx: &mut GameCtx) -> Result<(), GameError> {
+        self.check_judge_is_reading(player)?;
+        if self.in_bag() == 0 {
+            return Err(GameError {
+                code: "bag_empty",
+                message: "Every card is out of the bag",
             });
         }
         self.pull_next(ctx);
         Ok(())
+    }
+
+    fn show_all(&mut self, player: PlayerId, ctx: &mut GameCtx) -> Result<(), GameError> {
+        self.check_judge_is_reading(player)?;
+        if self.in_bag() > 0 {
+            return Err(GameError {
+                code: "cards_in_bag",
+                message: "There are still cards in the bag",
+            });
+        }
+        self.start_judging(ctx);
+        Ok(())
+    }
+
+    // How many answers are still waiting in the bag
+    fn in_bag(&self) -> usize {
+        self.reading_order.len().saturating_sub(self.pulled)
     }
 
     // Everyone sees the next answer at the same time, while the judge reads it out loud
@@ -330,12 +361,9 @@ impl BadTakes {
             ctx.broadcast(json!({ "event": "answer_pulled", "cards": cards }));
             self.pulled += 1;
         }
-        // Every answer is out of the bag, so the judge can pick
-        if self.pulled >= self.reading_order.len() {
-            self.start_judging(ctx);
-        }
     }
 
+    // All the answers are shown together, and the judge's time to pick starts
     fn start_judging(&mut self, ctx: &mut GameCtx) {
         self.phase = Phase::Judging;
         ctx.broadcast(json!({
@@ -503,6 +531,7 @@ impl Game for BadTakes {
         match action {
             Action::Submit { cards } => self.submit(player, cards, ctx),
             Action::Pull => self.pull(player, ctx),
+            Action::ShowAll => self.show_all(player, ctx),
             Action::Pick { card } => self.pick(player, card, ctx),
         }
     }
@@ -571,7 +600,7 @@ impl Game for BadTakes {
             "submitted": self.submitted_players(),
             "my_submission": self.submissions.get(&player),
             "cards_to_judge": self.cards_to_judge(),
-            "in_bag": self.reading_order.len().saturating_sub(self.pulled),
+            "in_bag": self.in_bag(),
             "winner": self.winner,
         })
     }
@@ -838,19 +867,31 @@ mod tests {
         Ok(ctx)
     }
 
-    // The judge pulls out every answer still in the bag
-    fn pull_all(game: &mut BadTakes, ctx: &mut GameCtx) {
+    // The judge shows every answer together
+    fn show_all(game: &mut BadTakes, player: PlayerId) -> Result<GameCtx, GameError> {
+        let mut ctx = GameCtx::default();
+        game.handle_action(player, json!({ "kind": "show_all" }), &mut ctx)?;
+        Ok(ctx)
+    }
+
+    // The judge pulls out every answer still in the bag, then shows them all
+    fn pull_and_show_all(game: &mut BadTakes, ctx: &mut GameCtx) {
+        if game.phase != Phase::Reading {
+            return;
+        }
         let judge = game.judge.expect("a round has a judge");
-        while game.phase == Phase::Reading {
+        while game.in_bag() > 0 {
             game.handle_action(judge, json!({ "kind": "pull" }), ctx)
                 .unwrap();
         }
+        game.handle_action(judge, json!({ "kind": "show_all" }), ctx)
+            .unwrap();
     }
 
-    // Everyone plays, then the judge pulls out every answer, ready to pick
+    // Everyone plays, then the judge pulls out every answer and shows them all, ready to pick
     fn all_answers_out(game: &mut BadTakes, ctx: &mut GameCtx) {
         everyone_submits(game, ctx);
-        pull_all(game, ctx);
+        pull_and_show_all(game, ctx);
     }
 
     #[test]
@@ -869,7 +910,7 @@ mod tests {
         );
         assert!(
             ctx.timers.is_empty(),
-            "the pick timer waits for the last pull"
+            "the pick timer waits for the answers to be shown"
         );
         let view = game.view_for(1);
         assert_eq!(view["phase"], "reading");
@@ -899,28 +940,78 @@ mod tests {
     }
 
     #[test]
-    fn the_pick_timer_starts_after_the_last_pull() {
+    fn the_pick_timer_starts_when_the_judge_shows_all_the_answers() {
         let mut game = started_game(&[1, 2, 3]);
         everyone_submits(&mut game, &mut GameCtx::default());
         pull(&mut game, 1).unwrap();
 
+        // The last card gets read out like the others, with no rush to pick yet
         let last = game.submissions[&game.reading_order[1]].clone();
         let ctx = pull(&mut game, 1).unwrap();
-        assert_eq!(game.phase, Phase::Judging);
-        let messages: Vec<&Value> = ctx
-            .outgoing
-            .iter()
-            .map(|outgoing| &outgoing.message)
-            .collect();
+        assert_eq!(game.phase, Phase::Reading);
+        assert_eq!(ctx.outgoing.len(), 1);
         assert_eq!(
-            messages,
-            [
-                &json!({ "event": "answer_pulled", "cards": last }),
-                &json!({ "event": "judging_started", "judge_for": 45 }),
-            ]
+            ctx.outgoing[0].message,
+            json!({ "event": "answer_pulled", "cards": last })
+        );
+        assert!(ctx.timers.is_empty());
+        assert_eq!(game.view_for(2)["in_bag"], 0);
+
+        let ctx = show_all(&mut game, 1).unwrap();
+        assert_eq!(game.phase, Phase::Judging);
+        assert_eq!(ctx.outgoing[0].to, Recipient::Everyone);
+        assert_eq!(
+            ctx.outgoing[0].message,
+            json!({ "event": "judging_started", "judge_for": 45 })
         );
         assert_eq!(ctx.timers, [(game.timer_id(Timer::Judge), JUDGE_DURATION)]);
-        assert_eq!(game.view_for(2)["in_bag"], 0);
+        assert_eq!(game.view_for(2)["phase"], "judging");
+    }
+
+    #[test]
+    fn only_the_judge_can_show_the_answers() {
+        let mut game = started_game(&[1, 2, 3]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+        pull(&mut game, 1).unwrap();
+        pull(&mut game, 1).unwrap();
+
+        let result = show_all(&mut game, 2);
+        assert_eq!(result.err().map(|error| error.code), Some("not_the_judge"));
+        assert_eq!(game.phase, Phase::Reading);
+    }
+
+    #[test]
+    fn answers_cant_be_shown_with_cards_still_in_the_bag() {
+        let mut game = started_game(&[1, 2, 3]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+        pull(&mut game, 1).unwrap();
+
+        let result = show_all(&mut game, 1);
+        assert_eq!(result.err().map(|error| error.code), Some("cards_in_bag"));
+        assert_eq!(game.phase, Phase::Reading);
+    }
+
+    #[test]
+    fn pulling_from_an_empty_bag_is_refused() {
+        let mut game = started_game(&[1, 2, 3]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+        pull(&mut game, 1).unwrap();
+        pull(&mut game, 1).unwrap();
+
+        let result = pull(&mut game, 1);
+        assert_eq!(result.err().map(|error| error.code), Some("bag_empty"));
+        assert_eq!(game.pulled, 2);
+    }
+
+    #[test]
+    fn nothing_to_show_outside_the_reading() {
+        let mut game = started_game(&[1, 2, 3]);
+        let before = show_all(&mut game, 1);
+        assert_eq!(before.err().map(|error| error.code), Some("not_reading"));
+
+        all_answers_out(&mut game, &mut GameCtx::default());
+        let after = show_all(&mut game, 1);
+        assert_eq!(after.err().map(|error| error.code), Some("not_reading"));
     }
 
     #[test]
@@ -945,14 +1036,17 @@ mod tests {
     }
 
     #[test]
-    fn no_picking_until_every_answer_is_out() {
+    fn no_picking_until_the_answers_are_shown() {
         let mut game = started_game(&[1, 2, 3]);
         everyone_submits(&mut game, &mut GameCtx::default());
-        pull(&mut game, 1).unwrap();
-
         let pulled = game.submissions[&game.reading_order[0]][0].id;
-        let result = pick(&mut game, 1, pulled);
-        assert_eq!(result.err().map(|error| error.code), Some("not_judging"));
+
+        // Not with a card still in the bag, and not with the bag empty either
+        for _ in 0..2 {
+            pull(&mut game, 1).unwrap();
+            let result = pick(&mut game, 1, pulled);
+            assert_eq!(result.err().map(|error| error.code), Some("not_judging"));
+        }
         assert_eq!(game.winner, None);
     }
 
@@ -1270,9 +1364,9 @@ mod tests {
         assert!(ctx.outgoing.is_empty());
     }
 
-    // The judge pulls out every answer, picks the first, then the reveal runs out
+    // The judge pulls out and shows every answer, picks the first, then the reveal runs out
     fn finish_round(game: &mut BadTakes) {
-        pull_all(game, &mut GameCtx::default());
+        pull_and_show_all(game, &mut GameCtx::default());
         let first = game.reading_order[0];
         let card = game.submissions[&first][0].id;
         let judge = game.judge.expect("a round has a judge");
@@ -1805,7 +1899,7 @@ mod tests {
             submit(&mut game, player, &cards).unwrap();
         }
 
-        pull_all(&mut game, &mut GameCtx::default());
+        pull_and_show_all(&mut game, &mut GameCtx::default());
         let sams_second_card = game.submissions[&2][1].id;
         pick(&mut game, 1, sams_second_card).unwrap();
         assert_eq!(game.winner, Some(2));

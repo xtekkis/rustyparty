@@ -862,6 +862,7 @@ mod tests {
         for _ in 0..2 {
             room.game_action(1, json!({ "kind": "pull" }), &me);
         }
+        room.game_action(1, json!({ "kind": "show_all" }), &me);
 
         // Alex has read both answers, with no names, and picks the first
         let (_, alex_sees) = game_messages(&mut phones[0]);
@@ -919,10 +920,11 @@ mod tests {
             play_first_cards(&mut room, player_id, &view, &me);
         }
 
-        // Alex pulls out both answers but never picks, so a random answer wins when time is up
+        // Alex shows both answers but never picks, so a random answer wins when time is up
         for _ in 0..2 {
             room.game_action(1, json!({ "kind": "pull" }), &me);
         }
+        room.game_action(1, json!({ "kind": "show_all" }), &me);
         tokio::time::sleep(JUDGE_DURATION + Duration::from_secs(1)).await;
         while let Ok(reminder) = reminders.try_recv() {
             room.handle(reminder, &me);
@@ -999,6 +1001,7 @@ mod tests {
         for _ in 0..3 {
             room.game_action(1, json!({ "kind": "pull" }), &me);
         }
+        room.game_action(1, json!({ "kind": "show_all" }), &me);
         read_all(&mut phones, &mut seen, &mut views);
         let picked = views[0]["cards_to_judge"][0][0]["id"].clone();
         room.game_action(1, json!({ "kind": "pick", "card": picked }), &me);
