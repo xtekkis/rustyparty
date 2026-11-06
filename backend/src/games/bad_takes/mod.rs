@@ -27,13 +27,16 @@ enum Timer {
     Submit = 1,
     Reveal = 2,
     Judge = 3,
+    Pull = 4,
 }
 
 // How long players have to play their cards
 const SUBMIT_DURATION: Duration = Duration::from_secs(60);
-// The winning card, then the scores going up, before the next round or the final results
+// How long the judge can leave the next step, before it happens by itself
+pub(crate) const PULL_DURATION: Duration = Duration::from_secs(15);
 // How long the judge has to pick, before a random answer wins
 pub(crate) const JUDGE_DURATION: Duration = Duration::from_secs(45);
+// The winning card, then the scores going up, before the next round or the final results
 pub(crate) const REVEAL_DURATION: Duration = Duration::from_secs(9);
 
 // The registry entry, built at startup because the player limit depends on the deck
@@ -105,6 +108,8 @@ pub struct BadTakes {
     reading_order: Vec<PlayerId>,
     // How many answers the judge has pulled out of the bag, from the start of the reading order
     pulled: usize,
+    // How many auto-pull timers have started this round. Only the latest one counts
+    pull_timers: TimerId,
     // Whose cards the judge picked, kept secret until the reveal
     winner: Option<PlayerId>,
     phase: Phase,
@@ -137,6 +142,7 @@ impl BadTakes {
             submissions: HashMap::new(),
             reading_order: Vec::new(),
             pulled: 0,
+            pull_timers: 0,
             winner: None,
             phase: Phase::Submitting,
             rng,
@@ -163,6 +169,7 @@ impl BadTakes {
         }
         self.reading_order.clear();
         self.pulled = 0;
+        self.pull_timers = 0;
         self.winner = None;
         self.judge = self.next_judge();
         // Last round's prompt is used up. Out of prompts, the used ones become a new deck
@@ -183,7 +190,18 @@ impl BadTakes {
     }
 
     fn timer_id(&self, timer: Timer) -> TimerId {
-        self.round * 10 + timer as TimerId
+        self.round * 100 + timer as TimerId
+    }
+
+    // Each tap starts a new auto-pull timer, so each one gets its own id
+    fn pull_timer_id(&self) -> TimerId {
+        self.timer_id(Timer::Pull) + self.pull_timers
+    }
+
+    // The older auto-pull timers can't be cancelled, but their ids no longer count
+    fn start_pull_timer(&mut self, ctx: &mut GameCtx) {
+        self.pull_timers += 1;
+        ctx.start_timer(self.pull_timer_id(), PULL_DURATION);
     }
 
     // The player after the current judge in join order, back to the first after the last
@@ -306,6 +324,7 @@ impl BadTakes {
             "event": "reading_started",
             "answers": self.reading_order.len(),
         }));
+        self.start_pull_timer(ctx);
     }
 
     // Pulling and showing the cards are for the judge, while the answers are being read
@@ -360,6 +379,16 @@ impl BadTakes {
         if let Some(cards) = next.and_then(|player| self.submissions.get(player)) {
             ctx.broadcast(json!({ "event": "answer_pulled", "cards": cards }));
             self.pulled += 1;
+        }
+        self.start_pull_timer(ctx);
+    }
+
+    // The judge stopped tapping: the next card comes out, or they're all shown after the last
+    fn pull_time_up(&mut self, ctx: &mut GameCtx) {
+        if self.in_bag() > 0 {
+            self.pull_next(ctx);
+        } else {
+            self.start_judging(ctx);
         }
     }
 
@@ -540,6 +569,8 @@ impl Game for BadTakes {
         // Each timer only acts if its round is still at the step it was waiting on
         if timer == self.timer_id(Timer::Submit) && self.phase == Phase::Submitting {
             self.submit_time_up(ctx);
+        } else if timer == self.pull_timer_id() && self.phase == Phase::Reading {
+            self.pull_time_up(ctx);
         } else if timer == self.timer_id(Timer::Judge) && self.phase == Phase::Judging {
             self.judge_time_up(ctx);
         } else if timer == self.timer_id(Timer::Reveal) && self.phase == Phase::RoundOver {
@@ -908,8 +939,9 @@ mod tests {
             ctx.outgoing.last().map(|outgoing| &outgoing.message),
             Some(&json!({ "event": "reading_started", "answers": 2 }))
         );
-        assert!(
-            ctx.timers.is_empty(),
+        assert_eq!(
+            ctx.timers,
+            [(game.pull_timer_id(), PULL_DURATION)],
             "the pick timer waits for the answers to be shown"
         );
         let view = game.view_for(1);
@@ -954,7 +986,7 @@ mod tests {
             ctx.outgoing[0].message,
             json!({ "event": "answer_pulled", "cards": last })
         );
-        assert!(ctx.timers.is_empty());
+        assert_eq!(ctx.timers, [(game.pull_timer_id(), PULL_DURATION)]);
         assert_eq!(game.view_for(2)["in_bag"], 0);
 
         let ctx = show_all(&mut game, 1).unwrap();
@@ -1033,6 +1065,88 @@ mod tests {
         all_answers_out(&mut game, &mut GameCtx::default());
         let after = pull(&mut game, 1);
         assert_eq!(after.err().map(|error| error.code), Some("not_reading"));
+    }
+
+    #[test]
+    fn answers_come_out_by_themselves_when_the_judge_stops_tapping() {
+        let mut game = started_game(&[1, 2, 3]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+
+        // Both cards come out, each with 15 more seconds before the next step
+        for pulled in 1..=2 {
+            let answer = game.submissions[&game.reading_order[pulled - 1]].clone();
+            let mut ctx = GameCtx::default();
+            game.handle_timer(game.pull_timer_id(), &mut ctx);
+            assert_eq!(
+                ctx.outgoing[0].message,
+                json!({ "event": "answer_pulled", "cards": answer })
+            );
+            assert_eq!(ctx.timers, [(game.pull_timer_id(), PULL_DURATION)]);
+            assert_eq!(game.pulled, pulled);
+            assert_eq!(game.phase, Phase::Reading);
+        }
+
+        // Then they're shown together, and the judge's time to pick starts
+        let mut ctx = GameCtx::default();
+        game.handle_timer(game.pull_timer_id(), &mut ctx);
+        assert_eq!(game.phase, Phase::Judging);
+        assert_eq!(
+            ctx.outgoing[0].message,
+            json!({ "event": "judging_started", "judge_for": 45 })
+        );
+        assert_eq!(ctx.timers, [(game.timer_id(Timer::Judge), JUDGE_DURATION)]);
+    }
+
+    #[test]
+    fn a_tap_gives_the_judge_15_more_seconds() {
+        let mut game = started_game(&[1, 2, 3, 4]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+        let old_timer = game.pull_timer_id();
+        pull(&mut game, 1).unwrap();
+
+        let mut ctx = GameCtx::default();
+        game.handle_timer(old_timer, &mut ctx);
+        assert!(ctx.outgoing.is_empty());
+        assert!(ctx.timers.is_empty());
+        assert_eq!(game.pulled, 1);
+    }
+
+    #[test]
+    fn showing_the_answers_stops_the_auto_pull() {
+        let mut game = started_game(&[1, 2, 3]);
+        all_answers_out(&mut game, &mut GameCtx::default());
+
+        let mut ctx = GameCtx::default();
+        game.handle_timer(game.pull_timer_id(), &mut ctx);
+        assert!(ctx.outgoing.is_empty());
+        assert_eq!(game.phase, Phase::Judging);
+    }
+
+    #[test]
+    fn an_auto_pull_from_an_earlier_round_is_ignored() {
+        let mut game = started_game(&[1, 2, 3]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+        let round_one_timer = game.pull_timer_id();
+        finish_round(&mut game);
+        everyone_submits(&mut game, &mut GameCtx::default());
+
+        let mut ctx = GameCtx::default();
+        game.handle_timer(round_one_timer, &mut ctx);
+        assert!(ctx.outgoing.is_empty());
+        assert_eq!(game.pulled, 0);
+    }
+
+    #[test]
+    fn a_full_table_stays_inside_its_rounds_timer_ids() {
+        let players: Vec<PlayerId> = (1..=10).collect();
+        let mut game = started_game(&players);
+        all_answers_out(&mut game, &mut GameCtx::default());
+
+        assert_eq!(
+            game.pull_timers, 10,
+            "one for the bag, one for each of 9 cards"
+        );
+        assert!(game.pull_timer_id() < (game.round + 1) * 100);
     }
 
     #[test]
@@ -1529,8 +1643,8 @@ mod tests {
         let mut ctx = GameCtx::default();
         all_answers_out(&mut game, &mut ctx);
         assert_eq!(
-            ctx.timers,
-            [(game.timer_id(Timer::Judge), Duration::from_secs(45))]
+            ctx.timers.last(),
+            Some(&(game.timer_id(Timer::Judge), Duration::from_secs(45)))
         );
     }
 

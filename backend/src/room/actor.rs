@@ -690,7 +690,9 @@ mod tests {
     use super::*;
     use crate::games::Game;
     use crate::games::GameInfo;
-    use crate::games::bad_takes::{BadTakes, JUDGE_DURATION, REVEAL_DURATION, answer_ids, deck};
+    use crate::games::bad_takes::{
+        BadTakes, JUDGE_DURATION, PULL_DURATION, REVEAL_DURATION, answer_ids, deck,
+    };
     use crate::games::dummy::{DUMMY_INFO, DummyGame};
     use crate::protocol::RoomSettings;
     use rand::SeedableRng;
@@ -920,14 +922,12 @@ mod tests {
             play_first_cards(&mut room, player_id, &view, &me);
         }
 
-        // Alex shows both answers but never picks, so a random answer wins when time is up
-        for _ in 0..2 {
-            room.game_action(1, json!({ "kind": "pull" }), &me);
-        }
-        room.game_action(1, json!({ "kind": "show_all" }), &me);
-        tokio::time::sleep(JUDGE_DURATION + Duration::from_secs(1)).await;
-        while let Ok(reminder) = reminders.try_recv() {
-            room.handle(reminder, &me);
+        // Alex never taps: both cards come out, they're shown, then a random answer wins
+        for wait in [PULL_DURATION, PULL_DURATION, PULL_DURATION, JUDGE_DURATION] {
+            tokio::time::sleep(wait + Duration::from_secs(1)).await;
+            while let Ok(reminder) = reminders.try_recv() {
+                room.handle(reminder, &me);
+            }
         }
         let (events, view) = game_messages(&mut phones[0]);
         let reveal = events.last().expect("the reveal");
