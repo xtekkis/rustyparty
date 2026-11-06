@@ -34,8 +34,12 @@ enum Timer {
 const SUBMIT_DURATION: Duration = Duration::from_secs(60);
 // How long the judge can leave the next step, before it happens by itself
 pub(crate) const PULL_DURATION: Duration = Duration::from_secs(15);
+// The same, once the judge has missed a tap and seems to be away
+pub(crate) const IDLE_PULL_DURATION: Duration = Duration::from_secs(6);
 // How long the judge has to pick, before a random answer wins
 pub(crate) const JUDGE_DURATION: Duration = Duration::from_secs(45);
+// The same, for a judge who hasn't tapped at all this round
+pub(crate) const IDLE_JUDGE_DURATION: Duration = Duration::from_secs(20);
 // The winning card, then the scores going up, before the next round or the final results
 pub(crate) const REVEAL_DURATION: Duration = Duration::from_secs(9);
 
@@ -110,6 +114,10 @@ pub struct BadTakes {
     pulled: usize,
     // How many auto-pull timers have started this round. Only the latest one counts
     pull_timers: TimerId,
+    // Has the judge tapped at all this round
+    judge_tapped: bool,
+    // Has a card come out by itself since the judge last tapped
+    judge_missed_tap: bool,
     // Whose cards the judge picked, kept secret until the reveal
     winner: Option<PlayerId>,
     phase: Phase,
@@ -143,6 +151,8 @@ impl BadTakes {
             reading_order: Vec::new(),
             pulled: 0,
             pull_timers: 0,
+            judge_tapped: false,
+            judge_missed_tap: false,
             winner: None,
             phase: Phase::Submitting,
             rng,
@@ -170,6 +180,8 @@ impl BadTakes {
         self.reading_order.clear();
         self.pulled = 0;
         self.pull_timers = 0;
+        self.judge_tapped = false;
+        self.judge_missed_tap = false;
         self.winner = None;
         self.judge = self.next_judge();
         // Last round's prompt is used up. Out of prompts, the used ones become a new deck
@@ -201,7 +213,12 @@ impl BadTakes {
     // The older auto-pull timers can't be cancelled, but their ids no longer count
     fn start_pull_timer(&mut self, ctx: &mut GameCtx) {
         self.pull_timers += 1;
-        ctx.start_timer(self.pull_timer_id(), PULL_DURATION);
+        let wait = if self.judge_missed_tap {
+            IDLE_PULL_DURATION
+        } else {
+            PULL_DURATION
+        };
+        ctx.start_timer(self.pull_timer_id(), wait);
     }
 
     // The player after the current judge in join order, back to the first after the last
@@ -352,6 +369,8 @@ impl BadTakes {
                 message: "Every card is out of the bag",
             });
         }
+        self.judge_tapped = true;
+        self.judge_missed_tap = false;
         self.pull_next(ctx);
         Ok(())
     }
@@ -364,6 +383,7 @@ impl BadTakes {
                 message: "There are still cards in the bag",
             });
         }
+        self.judge_tapped = true;
         self.start_judging(ctx);
         Ok(())
     }
@@ -385,6 +405,7 @@ impl BadTakes {
 
     // The judge stopped tapping: the next card comes out, or they're all shown after the last
     fn pull_time_up(&mut self, ctx: &mut GameCtx) {
+        self.judge_missed_tap = true;
         if self.in_bag() > 0 {
             self.pull_next(ctx);
         } else {
@@ -395,11 +416,16 @@ impl BadTakes {
     // All the answers are shown together, and the judge's time to pick starts
     fn start_judging(&mut self, ctx: &mut GameCtx) {
         self.phase = Phase::Judging;
+        let judge_for = if self.judge_tapped {
+            JUDGE_DURATION
+        } else {
+            IDLE_JUDGE_DURATION
+        };
         ctx.broadcast(json!({
             "event": "judging_started",
-            "judge_for": JUDGE_DURATION.as_secs(),
+            "judge_for": judge_for.as_secs(),
         }));
-        ctx.start_timer(self.timer_id(Timer::Judge), JUDGE_DURATION);
+        ctx.start_timer(self.timer_id(Timer::Judge), judge_for);
     }
 
     // Whoever hasn't played by now sits this round out
@@ -1078,7 +1104,7 @@ mod tests {
         let mut game = started_game(&[1, 2, 3]);
         everyone_submits(&mut game, &mut GameCtx::default());
 
-        // Both cards come out, each with 15 more seconds before the next step
+        // Both cards come out, each with 6 more seconds before the next step
         for pulled in 1..=2 {
             let answer = game.submissions[&game.reading_order[pulled - 1]].clone();
             let mut ctx = GameCtx::default();
@@ -1087,20 +1113,125 @@ mod tests {
                 ctx.outgoing[0].message,
                 json!({ "event": "answer_pulled", "cards": answer })
             );
-            assert_eq!(ctx.timers, [(game.pull_timer_id(), PULL_DURATION)]);
+            assert_eq!(ctx.timers, [(game.pull_timer_id(), IDLE_PULL_DURATION)]);
             assert_eq!(game.pulled, pulled);
             assert_eq!(game.phase, Phase::Reading);
         }
 
-        // Then they're shown together, and the judge's time to pick starts
+        // Then they're shown together, and a judge who never tapped gets less time to pick
         let mut ctx = GameCtx::default();
         game.handle_timer(game.pull_timer_id(), &mut ctx);
         assert_eq!(game.phase, Phase::Judging);
         assert_eq!(
             ctx.outgoing[0].message,
-            json!({ "event": "judging_started", "judge_for": 45 })
+            json!({ "event": "judging_started", "judge_for": 20 })
         );
+        assert_eq!(
+            ctx.timers,
+            [(game.timer_id(Timer::Judge), IDLE_JUDGE_DURATION)]
+        );
+    }
+
+    // How long a judge who never taps holds up the round, from the bag to the random winner
+    fn seconds_held_up_by_an_idle_judge(players: &[PlayerId]) -> u64 {
+        let mut game = started_game(players);
+        let mut ctx = GameCtx::default();
+        everyone_submits(&mut game, &mut ctx);
+        let mut seconds = 0;
+        while game.phase != Phase::RoundOver {
+            let (timer, wait) = *ctx.timers.last().expect("a timer is running");
+            seconds += wait.as_secs();
+            ctx = GameCtx::default();
+            game.handle_timer(timer, &mut ctx);
+        }
+        seconds
+    }
+
+    #[test]
+    fn an_idle_judge_holds_up_the_round_for_about_a_minute() {
+        assert_eq!(seconds_held_up_by_an_idle_judge(&[1, 2, 3, 4]), 53);
+        let full_table: Vec<PlayerId> = (1..=10).collect();
+        assert_eq!(seconds_held_up_by_an_idle_judge(&full_table), 89);
+    }
+
+    #[test]
+    fn a_tap_after_a_missed_one_goes_back_to_15_seconds() {
+        let mut game = started_game(&[1, 2, 3, 4]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+        game.handle_timer(game.pull_timer_id(), &mut GameCtx::default());
+
+        let ctx = pull(&mut game, 1).unwrap();
+        assert_eq!(ctx.timers, [(game.pull_timer_id(), PULL_DURATION)]);
+    }
+
+    #[test]
+    fn a_judge_who_tapped_once_keeps_the_full_time_to_pick() {
+        let mut game = started_game(&[1, 2, 3]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+        pull(&mut game, 1).unwrap();
+
+        // The other card comes out by itself, and so does the show all
+        game.handle_timer(game.pull_timer_id(), &mut GameCtx::default());
+        let mut ctx = GameCtx::default();
+        game.handle_timer(game.pull_timer_id(), &mut ctx);
+        assert_eq!(ctx.outgoing[0].message["judge_for"], 45);
         assert_eq!(ctx.timers, [(game.timer_id(Timer::Judge), JUDGE_DURATION)]);
+    }
+
+    #[test]
+    fn showing_the_answers_counts_as_a_tap() {
+        let mut game = started_game(&[1, 2, 3]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+        for _ in 0..2 {
+            game.handle_timer(game.pull_timer_id(), &mut GameCtx::default());
+        }
+
+        let ctx = show_all(&mut game, 1).unwrap();
+        assert_eq!(ctx.outgoing[0].message["judge_for"], 45);
+    }
+
+    #[test]
+    fn a_refused_tap_doesnt_count() {
+        let mut game = started_game(&[1, 2, 3]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+
+        // Sam can't pull for the judge, and the judge can't show cards still in the bag
+        assert!(pull(&mut game, 2).is_err());
+        assert!(show_all(&mut game, 1).is_err());
+        assert!(!game.judge_tapped);
+    }
+
+    #[test]
+    fn an_idle_judge_doesnt_hurry_the_next_one() {
+        let mut game = started_game(&[1, 2, 3]);
+        let mut ctx = GameCtx::default();
+        everyone_submits(&mut game, &mut ctx);
+
+        // Every timer runs out until the next round starts
+        while game.round == 1 {
+            let (timer, _) = *ctx.timers.last().expect("a timer is running");
+            ctx = GameCtx::default();
+            game.handle_timer(timer, &mut ctx);
+        }
+
+        let mut ctx = GameCtx::default();
+        everyone_submits(&mut game, &mut ctx);
+        assert_eq!(ctx.timers, [(game.pull_timer_id(), PULL_DURATION)]);
+    }
+
+    #[test]
+    fn every_round_starts_with_the_full_time() {
+        let mut game = started_game(&[1, 2, 3]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+        game.handle_timer(game.pull_timer_id(), &mut GameCtx::default());
+        pull(&mut game, 1).unwrap();
+        finish_round(&mut game);
+
+        // The next judge hasn't missed anything, even after the last judge did
+        let mut ctx = GameCtx::default();
+        everyone_submits(&mut game, &mut ctx);
+        assert_eq!(ctx.timers, [(game.pull_timer_id(), PULL_DURATION)]);
+        assert!(!game.judge_tapped);
     }
 
     #[test]

@@ -691,7 +691,8 @@ mod tests {
     use crate::games::Game;
     use crate::games::GameInfo;
     use crate::games::bad_takes::{
-        BadTakes, JUDGE_DURATION, PULL_DURATION, REVEAL_DURATION, answer_ids, deck,
+        BadTakes, IDLE_JUDGE_DURATION, IDLE_PULL_DURATION, PULL_DURATION, REVEAL_DURATION,
+        answer_ids, deck,
     };
     use crate::games::dummy::{DUMMY_INFO, DummyGame};
     use crate::protocol::RoomSettings;
@@ -923,7 +924,12 @@ mod tests {
         }
 
         // Alex never taps: both cards come out, they're shown, then a random answer wins
-        for wait in [PULL_DURATION, PULL_DURATION, PULL_DURATION, JUDGE_DURATION] {
+        for wait in [
+            PULL_DURATION,
+            IDLE_PULL_DURATION,
+            IDLE_PULL_DURATION,
+            IDLE_JUDGE_DURATION,
+        ] {
             tokio::time::sleep(wait + Duration::from_secs(1)).await;
             while let Ok(reminder) = reminders.try_recv() {
                 room.handle(reminder, &me);
