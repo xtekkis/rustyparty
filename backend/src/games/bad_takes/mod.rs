@@ -594,7 +594,13 @@ impl Game for BadTakes {
         if let Some(cards) = self.submissions.remove(&player) {
             self.discard.extend(cards);
         }
-        self.reading_order.retain(|&id| id != player);
+        // If their answer was already out of the bag, one less is out, so the next stays hidden
+        if let Some(position) = self.reading_order.iter().position(|&id| id == player) {
+            self.reading_order.remove(position);
+            if position < self.pulled {
+                self.pulled -= 1;
+            }
+        }
 
         // Waiting players count, they take a seat at the next round
         let too_few = self.players.len() + self.waiting.len() < MIN_PLAYERS;
@@ -1745,6 +1751,139 @@ mod tests {
             assert_eq!(game.hands[&player].len(), HAND_SIZE);
         }
         assert_eq!(game.scores.values().sum::<u8>(), 0, "no point");
+    }
+
+    #[test]
+    fn the_judge_leaving_while_picking_cancels_the_round() {
+        let mut game = started_game(&[1, 2, 3, 4]);
+        all_answers_out(&mut game, &mut GameCtx::default());
+
+        let mut ctx = GameCtx::default();
+        game.player_left(1, &mut ctx);
+        assert_eq!(
+            ctx.outgoing[0].message,
+            json!({ "event": "round_cancelled" })
+        );
+        assert_eq!(game.phase, Phase::Submitting);
+        assert_eq!(game.pulled, 0);
+        assert!(game.submissions.is_empty());
+        assert_eq!(game.scores.values().sum::<u8>(), 0, "no point");
+    }
+
+    #[test]
+    fn a_leaver_whose_answer_is_out_doesnt_pull_the_next_card() {
+        let mut game = started_game(&[1, 2, 3, 4, 5]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+        pull(&mut game, 1).unwrap();
+        pull(&mut game, 1).unwrap();
+        let order = game.reading_order.clone();
+        let still_out = game.submissions[&order[1]].clone();
+        let next = game.submissions[&order[2]].clone();
+
+        game.player_left(order[0], &mut GameCtx::default());
+        let view = game.view_for(1);
+        assert_eq!(view["cards_to_judge"], json!([still_out]));
+        assert_eq!(view["in_bag"], 2);
+
+        let ctx = pull(&mut game, 1).unwrap();
+        assert_eq!(
+            ctx.outgoing[0].message,
+            json!({ "event": "answer_pulled", "cards": next })
+        );
+    }
+
+    #[test]
+    fn a_leaver_whose_answer_is_in_the_bag_is_never_shown() {
+        let mut game = started_game(&[1, 2, 3, 4, 5]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+        pull(&mut game, 1).unwrap();
+        let order = game.reading_order.clone();
+        let first = game.submissions[&order[0]].clone();
+        let second = game.submissions[&order[1]].clone();
+        let fourth = game.submissions[&order[3]].clone();
+
+        game.player_left(order[2], &mut GameCtx::default());
+        let view = game.view_for(1);
+        assert_eq!(view["cards_to_judge"], json!([first]));
+        assert_eq!(view["in_bag"], 2);
+
+        pull(&mut game, 1).unwrap();
+        pull(&mut game, 1).unwrap();
+        assert_eq!(
+            game.view_for(1)["cards_to_judge"],
+            json!([first, second, fourth])
+        );
+        assert_eq!(game.view_for(1)["in_bag"], 0);
+    }
+
+    #[test]
+    fn the_judge_can_show_the_answers_when_the_last_card_in_the_bag_leaves() {
+        let mut game = started_game(&[1, 2, 3, 4]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+        pull(&mut game, 1).unwrap();
+        pull(&mut game, 1).unwrap();
+
+        game.player_left(game.reading_order[2], &mut GameCtx::default());
+        assert_eq!(game.phase, Phase::Reading, "the judge can still read");
+        assert_eq!(game.view_for(1)["in_bag"], 0);
+
+        show_all(&mut game, 1).unwrap();
+        assert_eq!(game.phase, Phase::Judging);
+    }
+
+    #[test]
+    fn the_auto_pull_carries_on_after_a_leaver() {
+        let mut game = started_game(&[1, 2, 3, 4]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+        pull(&mut game, 1).unwrap();
+        pull(&mut game, 1).unwrap();
+        game.player_left(game.reading_order[2], &mut GameCtx::default());
+
+        // Nothing left in the bag, so the waiting timer shows the answers
+        game.handle_timer(game.pull_timer_id(), &mut GameCtx::default());
+        assert_eq!(game.phase, Phase::Judging);
+    }
+
+    #[test]
+    fn the_round_is_skipped_when_the_only_answer_leaves_after_being_pulled() {
+        let mut game = started_game(&[1, 2, 3, 4, 5]);
+        let card = game.hands[&2][0].id;
+        submit(&mut game, 2, &[card]).unwrap();
+        game.handle_timer(game.timer_id(Timer::Submit), &mut GameCtx::default());
+        pull(&mut game, 1).unwrap();
+
+        let mut ctx = GameCtx::default();
+        game.player_left(2, &mut ctx);
+        assert_eq!(ctx.outgoing[0].message, json!({ "event": "round_skipped" }));
+        assert_eq!(game.round, 2);
+        assert_eq!(game.pulled, 0);
+    }
+
+    #[test]
+    fn a_leavers_answer_cant_be_picked() {
+        let mut game = started_game(&[1, 2, 3, 4]);
+        all_answers_out(&mut game, &mut GameCtx::default());
+        let leaver = game.reading_order[0];
+        let their_card = game.submissions[&leaver][0].id;
+
+        game.player_left(leaver, &mut GameCtx::default());
+        let result = pick(&mut game, 1, their_card);
+        assert_eq!(result.err().map(|error| error.code), Some("not_a_choice"));
+        assert_eq!(game.winner, None);
+    }
+
+    #[test]
+    fn the_game_ending_mid_reading_stops_the_auto_pull() {
+        let mut game = started_game(&[1, 2, 3]);
+        everyone_submits(&mut game, &mut GameCtx::default());
+
+        game.player_left(3, &mut GameCtx::default());
+        assert!(game.is_finished());
+
+        let mut ctx = GameCtx::default();
+        game.handle_timer(game.pull_timer_id(), &mut ctx);
+        assert!(ctx.outgoing.is_empty());
+        assert!(game.is_finished());
     }
 
     #[test]
