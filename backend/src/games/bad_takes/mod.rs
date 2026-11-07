@@ -455,12 +455,19 @@ impl BadTakes {
     // The final scores, and why the game ended
     fn end_game(&mut self, winner: Option<PlayerId>, reason: &str, ctx: &mut GameCtx) {
         self.phase = Phase::GameOver;
+        self.winner = winner;
         ctx.broadcast(json!({
             "event": "game_over",
             "reason": reason,
             "winner": winner,
+            "cards": self.winning_cards(),
             "scores": self.scores,
         }));
+    }
+
+    // The winner's answer. It stops being secret once the judge has picked it
+    fn winning_cards(&self) -> Option<&Vec<AnswerCard>> {
+        self.winner.and_then(|winner| self.submissions.get(&winner))
     }
 
     fn pick(&mut self, player: PlayerId, card: CardId, ctx: &mut GameCtx) -> Result<(), GameError> {
@@ -511,7 +518,7 @@ impl BadTakes {
         ctx.broadcast(json!({
             "event": "winner_revealed",
             "winner": winner,
-            "cards": self.submissions.get(&winner),
+            "cards": self.winning_cards(),
             "points": points,
             "reveal_for": REVEAL_DURATION.as_secs(),
             "last_round": self.game_winner().is_some(),
@@ -665,6 +672,7 @@ impl Game for BadTakes {
             "cards_to_judge": self.cards_to_judge(),
             "in_bag": self.in_bag(),
             "winner": self.winner,
+            "winning_cards": self.winning_cards(),
         })
     }
 
@@ -1490,9 +1498,55 @@ mod tests {
                 "event": "game_over",
                 "reason": "points_to_win",
                 "winner": 2,
+                "cards": game.submissions[&2],
                 "scores": { "1": 0, "2": 7, "3": 0 },
             })
         );
+    }
+
+    #[test]
+    fn views_show_the_winning_cards_once_they_are_picked() {
+        let mut game = started_game(&[1, 2, 3]);
+        all_answers_out(&mut game, &mut GameCtx::default());
+        let sams_cards = game.submissions[&2].clone();
+        assert_eq!(game.view_for(3)["winning_cards"], json!(null));
+
+        pick(&mut game, 1, sams_cards[0].id).unwrap();
+        assert_eq!(game.view_for(3)["winning_cards"], json!(sams_cards));
+
+        // Gone again when the next round starts
+        game.handle_timer(game.timer_id(Timer::Reveal), &mut GameCtx::default());
+        assert_eq!(game.view_for(3)["winning_cards"], json!(null));
+    }
+
+    #[test]
+    fn the_last_view_of_the_game_shows_the_winning_cards() {
+        let mut game = started_game(&[1, 2, 3]);
+        game.scores.insert(2, 6);
+        all_answers_out(&mut game, &mut GameCtx::default());
+        let sams_cards = game.submissions[&2].clone();
+        pick(&mut game, 1, sams_cards[0].id).unwrap();
+
+        game.handle_timer(game.timer_id(Timer::Reveal), &mut GameCtx::default());
+        assert!(game.is_finished());
+        assert_eq!(game.view_for(3)["winner"], 2);
+        assert_eq!(game.view_for(3)["winning_cards"], json!(sams_cards));
+    }
+
+    #[test]
+    fn too_few_players_during_the_reveal_means_nobody_won_the_game() {
+        let mut game = started_game(&[1, 2, 3]);
+        all_answers_out(&mut game, &mut GameCtx::default());
+        let sams_card = game.submissions[&2][0].id;
+        pick(&mut game, 1, sams_card).unwrap();
+
+        let mut ctx = GameCtx::default();
+        game.player_left(3, &mut ctx);
+        assert!(game.is_finished());
+        assert_eq!(ctx.outgoing[0].message["winner"], json!(null));
+        assert_eq!(ctx.outgoing[0].message["cards"], json!(null));
+        assert_eq!(game.view_for(1)["winner"], json!(null));
+        assert_eq!(game.view_for(1)["winning_cards"], json!(null));
     }
 
     #[test]
@@ -1537,6 +1591,7 @@ mod tests {
                 "event": "game_over",
                 "reason": "not_enough_players",
                 "winner": null,
+                "cards": null,
                 "scores": { "1": 0, "2": 4 },
             })
         );
