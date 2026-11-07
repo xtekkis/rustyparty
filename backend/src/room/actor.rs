@@ -8,7 +8,9 @@ use tokio::time::Instant;
 
 use super::player::is_known_avatar;
 use super::vote::pick_winner;
-use super::{MAX_ROOM_PLAYERS, Room, RoomState, clean_nickname, is_valid_points_to_win};
+use super::{
+    MAX_ROOM_PLAYERS, Room, RoomState, clean_nickname, is_valid_points_to_win, seconds_until,
+};
 use crate::games::{GameCtx, GameInfo, Outgoing, Recipient, TimerId, find_game};
 use crate::protocol::ServerMessage;
 use serde_json::Value;
@@ -225,7 +227,7 @@ impl Room {
                 }
             }
             RoomCommand::GameTimer { game_number, timer } => {
-                if let RoomState::InGame { game, number } = &mut self.state
+                if let RoomState::InGame { game, number, .. } = &mut self.state
                     && *number == game_number
                 {
                     let mut ctx = GameCtx::default();
@@ -308,7 +310,7 @@ impl Room {
 
     // The game decides when they start playing, usually at its next round
     fn tell_game_about_late_joiner(&mut self, player_id: u32, me: &WeakSender<RoomCommand>) {
-        let RoomState::InGame { game, number } = &mut self.state else {
+        let RoomState::InGame { game, number, .. } = &mut self.state else {
             return;
         };
         let number = *number;
@@ -370,7 +372,7 @@ impl Room {
 
     // Pass a player's move to the game, or tell them why the game refused it
     fn game_action(&mut self, player_id: u32, action: Value, me: &WeakSender<RoomCommand>) {
-        let RoomState::InGame { game, number } = &mut self.state else {
+        let RoomState::InGame { game, number, .. } = &mut self.state else {
             self.send_error(player_id, "not_in_game", "No game is running");
             return;
         };
@@ -460,7 +462,7 @@ impl Room {
 
     // Someone is gone for good, the game may need to cancel a round or end
     fn tell_game_about_leaver(&mut self, player_id: u32, me: &WeakSender<RoomCommand>) {
-        let RoomState::InGame { game, number } = &mut self.state else {
+        let RoomState::InGame { game, number, .. } = &mut self.state else {
             return;
         };
         let number = *number;
@@ -507,7 +509,7 @@ impl Room {
 
     // The game says it's over: show the results for a while
     fn finish_game_if_over(&mut self, me: &WeakSender<RoomCommand>) {
-        let RoomState::InGame { game, number } = &self.state else {
+        let RoomState::InGame { game, number, .. } = &self.state else {
             return;
         };
         if !game.is_finished() {
@@ -533,7 +535,11 @@ impl Room {
         let mut ctx = GameCtx::default();
         game.start(&players, &mut ctx);
 
-        self.state = RoomState::InGame { game, number };
+        self.state = RoomState::InGame {
+            game,
+            number,
+            ends_at: None,
+        };
         tracing::info!("Game {} started in room {}", info.id, self.code);
         self.run_game_ctx(ctx, number, me);
     }
@@ -624,10 +630,13 @@ impl Room {
     }
 
     // Carry out what a game asked for: send its messages and start its timers
-    fn run_game_ctx(&self, ctx: GameCtx, game_number: u32, me: &WeakSender<RoomCommand>) {
+    fn run_game_ctx(&mut self, ctx: GameCtx, game_number: u32, me: &WeakSender<RoomCommand>) {
         self.send_game_messages(ctx.outgoing);
         for (timer, after) in ctx.timers {
             remind(me, after, RoomCommand::GameTimer { game_number, timer });
+            if let RoomState::InGame { ends_at, .. } = &mut self.state {
+                *ends_at = Some(Instant::now() + after);
+            }
         }
         self.send_game_views();
     }
@@ -640,11 +649,13 @@ impl Room {
     }
 
     fn send_game_view_to(&self, player_id: u32) {
-        let RoomState::InGame { game, .. } = &self.state else {
+        let RoomState::InGame { game, ends_at, .. } = &self.state else {
             return;
         };
         let view = game.view_for(player_id);
-        self.send_to_player(player_id, ServerMessage::GameView { view });
+        // A finished game counts down to nothing, whatever timer was still running
+        let ends_in = ends_at.filter(|_| !game.is_finished()).map(seconds_until);
+        self.send_to_player(player_id, ServerMessage::GameView { view, ends_in });
     }
 
     // Send what a game asked to send, each one wrapped as a game event
@@ -766,7 +777,7 @@ mod tests {
         for message in drain(messages) {
             match message {
                 ServerMessage::GameEvent { event } => events.push(event),
-                ServerMessage::GameView { view: latest } => view = latest,
+                ServerMessage::GameView { view: latest, .. } => view = latest,
                 _ => {}
             }
         }
@@ -972,6 +983,98 @@ mod tests {
         assert_eq!(view["scores"], json!({ "2": 0, "3": 0, "4": 0 }));
     }
 
+    // The time left in the last game view this phone got, if it got one
+    fn view_ends_in(messages: &mut UnboundedReceiver<ServerMessage>) -> Option<Option<u64>> {
+        drain(messages)
+            .into_iter()
+            .rev()
+            .find_map(|message| match message {
+                ServerMessage::GameView { ends_in, .. } => Some(ends_in),
+                _ => None,
+            })
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn game_views_say_how_long_the_countdown_has_left() {
+        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
+        let (commands, _reminders) = mpsc::channel(16);
+        let me = commands.downgrade();
+        room.start_game(&bad_takes(), &me);
+        assert_eq!(view_ends_in(&mut phones[0]), Some(Some(60)));
+
+        // Half a second gone still shows 60
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        room.send_game_views();
+        assert_eq!(view_ends_in(&mut phones[0]), Some(Some(60)));
+
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        room.send_game_views();
+        assert_eq!(view_ends_in(&mut phones[0]), Some(Some(50)));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_phone_coming_back_gets_the_time_left() {
+        let (mut room, _phones) = room_with(&["Alex", "Sam", "Kim"]);
+        let (commands, _reminders) = mpsc::channel(16);
+        let me = commands.downgrade();
+        room.start_game(&bad_takes(), &me);
+        tokio::time::sleep(Duration::from_secs(20)).await;
+
+        let token = room.players[1].token.clone();
+        let (connection, mut new_phone) = mpsc::unbounded_channel();
+        room.join("Sam".to_string(), None, Some(token), connection, &me);
+        assert_eq!(view_ends_in(&mut new_phone), Some(Some(40)));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_countdown_follows_the_latest_timer() {
+        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
+        let (commands, _reminders) = mpsc::channel(16);
+        let me = commands.downgrade();
+        room.start_game(&bad_takes(), &me);
+        for player_id in [2, 3] {
+            let (_, view) = game_messages(&mut phones[player_id as usize - 1]);
+            play_first_cards(&mut room, player_id, &view, &me);
+        }
+        assert_eq!(view_ends_in(&mut phones[0]), Some(Some(15)), "the bag");
+
+        for _ in 0..2 {
+            room.game_action(1, json!({ "kind": "pull" }), &me);
+        }
+        room.game_action(1, json!({ "kind": "show_all" }), &me);
+        assert_eq!(view_ends_in(&mut phones[0]), Some(Some(45)), "the pick");
+
+        let (_, view) = game_messages(&mut phones[1]);
+        let card = view["cards_to_judge"][0][0]["id"].clone();
+        room.game_action(1, json!({ "kind": "pick", "card": card }), &me);
+        assert_eq!(view_ends_in(&mut phones[0]), Some(Some(4)), "the winner");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_finished_game_has_no_countdown() {
+        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
+        let (commands, _reminders) = mpsc::channel(16);
+        let me = commands.downgrade();
+        room.start_game(&bad_takes(), &me);
+
+        // Too few players left, with most of the 60 seconds still to go
+        room.leave(3, &me);
+        assert_eq!(view_ends_in(&mut phones[0]), Some(None));
+    }
+
+    #[tokio::test]
+    async fn a_game_with_no_timer_has_no_countdown() {
+        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
+        room.state = RoomState::InGame {
+            game: Box::new(DummyGame::default()),
+            number: 1,
+            ends_at: None,
+        };
+
+        room.send_game_views();
+        assert_eq!(view_ends_in(&mut phones[0]), Some(None));
+    }
+
     // Note the answer cards in everything each phone got, and keep its last view
     fn read_all(
         phones: &mut [UnboundedReceiver<ServerMessage>],
@@ -982,7 +1085,7 @@ mod tests {
             for message in drain(phone) {
                 let json = serde_json::to_value(&message).expect("messages are JSON");
                 answer_ids(&json, &mut seen[index]);
-                if let ServerMessage::GameView { view } = message {
+                if let ServerMessage::GameView { view, .. } = message {
                     views[index] = view;
                 }
             }
@@ -1232,7 +1335,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn game_timer_fires_after_its_delay() {
-        let room = Room::new("KXTP".to_string());
+        let mut room = Room::new("KXTP".to_string());
         let (commands, mut receiver) = mpsc::channel(8);
 
         let mut ctx = GameCtx::default();
@@ -1259,6 +1362,7 @@ mod tests {
         room.state = RoomState::InGame {
             game: Box::new(DummyGame::default()),
             number: 2,
+            ends_at: None,
         };
         let (commands, _receiver) = mpsc::channel(8);
         let me = commands.downgrade();

@@ -35,6 +35,12 @@ pub fn clean_nickname(nickname: &str) -> Option<String> {
     }
 }
 
+// Seconds until a moment, rounded up so half a second left still shows 1
+pub fn seconds_until(moment: Instant) -> u64 {
+    let left = moment.saturating_duration_since(Instant::now());
+    left.as_secs() + u64::from(left.subsec_nanos() > 0)
+}
+
 // Where the room is in its cycle: Lobby, Voting, InGame, Results, then back to Lobby
 pub enum RoomState {
     Lobby,
@@ -49,6 +55,8 @@ pub enum RoomState {
         game: Box<dyn Game>,
         // Counts up with every game, so a timer from an old game can't reach a new one
         number: u32,
+        // When the timer the game started last runs out
+        ends_at: Option<Instant>,
     },
     Results {
         // The game that just ended, so an old timer can't end a newer results screen
@@ -242,9 +250,7 @@ impl Room {
             for (&player_id, &game_id) in picks {
                 votes.entry(game_id).or_default().push(player_id);
             }
-            // Round up, so a vote with half a second left still shows 1
-            let left = ends_at.saturating_duration_since(Instant::now());
-            ends_in = left.as_secs() + u64::from(left.subsec_nanos() > 0);
+            ends_in = seconds_until(*ends_at);
         }
         // Same order every time, so the phones don't reshuffle the bubbles
         for voters in votes.values_mut() {

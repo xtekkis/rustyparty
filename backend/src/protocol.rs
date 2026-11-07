@@ -90,6 +90,8 @@ pub enum ServerMessage {
     },
     GameView {
         view: serde_json::Value,
+        // Seconds left on the game's countdown, if one is running
+        ends_in: Option<u64>,
     },
     // Something a game sent, like a round result
     GameEvent {
