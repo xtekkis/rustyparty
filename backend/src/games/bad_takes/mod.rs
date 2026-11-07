@@ -40,8 +40,8 @@ pub(crate) const IDLE_PULL_DURATION: Duration = Duration::from_secs(6);
 pub(crate) const JUDGE_DURATION: Duration = Duration::from_secs(45);
 // The same, for a judge who hasn't tapped at all this round
 pub(crate) const IDLE_JUDGE_DURATION: Duration = Duration::from_secs(20);
-// The winning card, then the scores going up, before the next round or the final results
-pub(crate) const REVEAL_DURATION: Duration = Duration::from_secs(9);
+// The winning sentence and the scores, before the next round or the final results
+pub(crate) const REVEAL_DURATION: Duration = Duration::from_secs(4);
 
 // The registry entry, built at startup because the player limit depends on the deck
 pub fn info() -> GameInfo {
@@ -1446,7 +1446,7 @@ mod tests {
                 "winner": 3,
                 "cards": kims_cards,
                 "points": 1,
-                "reveal_for": 9,
+                "reveal_for": 4,
                 "last_round": false,
                 "judge_timed_out": false,
             })
@@ -1576,7 +1576,7 @@ mod tests {
     }
 
     #[test]
-    fn the_reveal_lasts_nine_seconds() {
+    fn the_reveal_lasts_four_seconds() {
         let mut game = started_game(&[1, 2, 3]);
         all_answers_out(&mut game, &mut GameCtx::default());
         let sams_card = game.submissions[&2][0].id;
@@ -1584,7 +1584,7 @@ mod tests {
         let ctx = pick(&mut game, 1, sams_card).unwrap();
         assert_eq!(
             ctx.timers,
-            [(game.timer_id(Timer::Reveal), Duration::from_secs(9))]
+            [(game.timer_id(Timer::Reveal), Duration::from_secs(4))]
         );
     }
 
