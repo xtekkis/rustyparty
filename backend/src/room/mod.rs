@@ -4,6 +4,7 @@ pub mod player;
 pub mod vote;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::time::Duration;
 
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::time::Instant;
@@ -15,6 +16,8 @@ use player::{Player, generate_token};
 const NICKNAME_MAX_LENGTH: usize = 16;
 // The most any game allows, so a room can't be flooded with extra players
 pub const MAX_ROOM_PLAYERS: usize = 10;
+// How long a disconnected player keeps their seat
+pub const DISCONNECT_GRACE: Duration = Duration::from_secs(90);
 
 const POINTS_TO_WIN_DEFAULT: u8 = 7;
 const POINTS_TO_WIN_MIN: u8 = 3;
@@ -283,6 +286,9 @@ impl Room {
                 avatar: player.avatar.clone(),
                 ready: player.ready,
                 connected: player.disconnected_since.is_none(),
+                reconnect_in: player
+                    .disconnected_since
+                    .map(|since| seconds_until(since + DISCONNECT_GRACE)),
             })
             .collect();
         ServerMessage::Lobby {
@@ -304,7 +310,6 @@ impl Room {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
     use tokio::sync::mpsc;
 
     #[test]
@@ -499,6 +504,36 @@ mod tests {
         };
         let connected: Vec<bool> = players.iter().map(|player| player.connected).collect();
         assert_eq!(connected, [false, true]);
+    }
+
+    // What the lobby says about one player
+    fn lobby_player(room: &Room, player_id: u32) -> LobbyPlayer {
+        let ServerMessage::Lobby { players, .. } = room.lobby_message() else {
+            panic!("a lobby message");
+        };
+        players
+            .into_iter()
+            .find(|player| player.id == player_id)
+            .expect("the player is in the lobby")
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_lobby_says_how_long_a_disconnected_player_has_left() {
+        let mut room = Room::new("KXTP".to_string());
+        let alex = room.add_player("Alex".to_string(), None, test_sender()).id;
+        let sam = room.add_player("Sam".to_string(), None, test_sender());
+        let (sam, sams_token) = (sam.id, sam.token.clone());
+        room.player_mut(sam)
+            .expect("Sam is in the room")
+            .disconnected_since = Some(Instant::now());
+        assert_eq!(lobby_player(&room, sam).reconnect_in, Some(90));
+        assert_eq!(lobby_player(&room, alex).reconnect_in, None);
+
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        assert_eq!(lobby_player(&room, sam).reconnect_in, Some(60));
+
+        room.reconnect(&sams_token, test_sender());
+        assert_eq!(lobby_player(&room, sam).reconnect_in, None);
     }
 
     #[test]

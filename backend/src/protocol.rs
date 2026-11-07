@@ -44,6 +44,8 @@ pub struct LobbyPlayer {
     pub avatar: Option<String>,
     pub ready: bool,
     pub connected: bool,
+    // Seconds a disconnected player has left to come back
+    pub reconnect_in: Option<u64>,
 }
 
 // A game players can vote for

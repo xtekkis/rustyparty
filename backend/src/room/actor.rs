@@ -9,7 +9,8 @@ use tokio::time::Instant;
 use super::player::is_known_avatar;
 use super::vote::pick_winner;
 use super::{
-    MAX_ROOM_PLAYERS, Room, RoomState, clean_nickname, is_valid_points_to_win, seconds_until,
+    DISCONNECT_GRACE, MAX_ROOM_PLAYERS, Room, RoomState, clean_nickname, is_valid_points_to_win,
+    seconds_until,
 };
 use crate::games::{GameCtx, GameInfo, Outgoing, Recipient, TimerId, find_game};
 use crate::protocol::ServerMessage;
@@ -17,9 +18,6 @@ use serde_json::Value;
 
 // How many commands can wait for a room before senders have to wait
 const COMMAND_QUEUE_SIZE: usize = 64;
-
-// How long a disconnected player keeps their seat
-const DISCONNECT_GRACE: Duration = Duration::from_secs(90);
 
 // The game vote needs at least this many players
 const MIN_PLAYERS_TO_VOTE: usize = 3;
@@ -1902,6 +1900,25 @@ mod tests {
         .await;
         assert_eq!(error_code(sam_messages.recv().await), "not_host");
         assert_eq!(player_count(&room).await, 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_disconnect_tells_everyone_the_time_left() {
+        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
+        let (_commands, me) = test_me();
+        let sams_connection = room.players[1].sender.clone();
+
+        room.disconnect(2, &sams_connection, &me);
+        let players = drain(&mut phones[0])
+            .into_iter()
+            .rev()
+            .find_map(|message| match message {
+                ServerMessage::Lobby { players, .. } => Some(players),
+                _ => None,
+            })
+            .expect("a lobby message");
+        assert_eq!(players[1].reconnect_in, Some(90));
+        assert_eq!(players[0].reconnect_in, None);
     }
 
     #[tokio::test(start_paused = true)]
