@@ -23,13 +23,13 @@ const COMMAND_QUEUE_SIZE: usize = 64;
 const MIN_PLAYERS_TO_VOTE: usize = 3;
 
 // How long players have to vote
-const VOTE_DURATION: Duration = Duration::from_secs(30);
+pub(super) const VOTE_DURATION: Duration = Duration::from_secs(30);
 
 // How long the final scores stay on screen
-const RESULTS_DURATION: Duration = Duration::from_secs(10);
+pub(super) const RESULTS_DURATION: Duration = Duration::from_secs(10);
 
 // A room with nobody connected for this long deletes itself
-const EMPTY_ROOM_LIFETIME: Duration = Duration::from_secs(5 * 60);
+pub(super) const EMPTY_ROOM_LIFETIME: Duration = Duration::from_secs(5 * 60);
 
 // All rooms by code, shared by the whole server
 pub type RoomMap = Arc<Mutex<HashMap<String, RoomHandle>>>;
@@ -163,7 +163,7 @@ async fn run_room(
 }
 
 impl Room {
-    fn handle(&mut self, command: RoomCommand, me: &WeakSender<RoomCommand>) {
+    pub(super) fn handle(&mut self, command: RoomCommand, me: &WeakSender<RoomCommand>) {
         match command {
             RoomCommand::Join {
                 nickname,
@@ -239,7 +239,7 @@ impl Room {
     }
 
     // Add a new player, or give a returning player their seat back
-    fn join(
+    pub(super) fn join(
         &mut self,
         nickname: String,
         avatar: Option<String>,
@@ -328,7 +328,7 @@ impl Room {
         }
     }
 
-    fn set_ready(&mut self, player_id: u32, ready: bool) {
+    pub(super) fn set_ready(&mut self, player_id: u32, ready: bool) {
         if !matches!(self.state, RoomState::Lobby) {
             self.send_error(
                 player_id,
@@ -344,7 +344,7 @@ impl Room {
         }
     }
 
-    fn vote(&mut self, player_id: u32, game_id: &str) {
+    pub(super) fn vote(&mut self, player_id: u32, game_id: &str) {
         if !matches!(self.state, RoomState::Voting { .. }) {
             self.send_error(player_id, "not_voting", "Voting isn't open");
             return;
@@ -369,7 +369,12 @@ impl Room {
     }
 
     // Pass a player's move to the game, or tell them why the game refused it
-    fn game_action(&mut self, player_id: u32, action: Value, me: &WeakSender<RoomCommand>) {
+    pub(super) fn game_action(
+        &mut self,
+        player_id: u32,
+        action: Value,
+        me: &WeakSender<RoomCommand>,
+    ) {
         let RoomState::InGame { game, number, .. } = &mut self.state else {
             self.send_error(player_id, "not_in_game", "No game is running");
             return;
@@ -384,7 +389,7 @@ impl Room {
         }
     }
 
-    fn set_points_to_win(&mut self, player_id: u32, points_to_win: u8) {
+    pub(super) fn set_points_to_win(&mut self, player_id: u32, points_to_win: u8) {
         if !is_valid_points_to_win(points_to_win) {
             self.send_error(
                 player_id,
@@ -410,7 +415,7 @@ impl Room {
     }
 
     // Host kicks or bans another player
-    fn remove_by_host(
+    pub(super) fn remove_by_host(
         &mut self,
         player_id: u32,
         target_id: u32,
@@ -450,7 +455,7 @@ impl Room {
         self.tell_game_about_leaver(target_id, me);
     }
 
-    fn leave(&mut self, player_id: u32, me: &WeakSender<RoomCommand>) {
+    pub(super) fn leave(&mut self, player_id: u32, me: &WeakSender<RoomCommand>) {
         if self.remove_player(player_id) {
             tracing::info!("Player {player_id} left room {}", self.code);
             self.broadcast_players();
@@ -470,7 +475,7 @@ impl Room {
     }
 
     // Keep the seat for a while, the player can come back with their token
-    fn disconnect(
+    pub(super) fn disconnect(
         &mut self,
         player_id: u32,
         connection: &Connection,
@@ -506,7 +511,7 @@ impl Room {
     }
 
     // The game says it's over: show the results for a while
-    fn finish_game_if_over(&mut self, me: &WeakSender<RoomCommand>) {
+    pub(super) fn finish_game_if_over(&mut self, me: &WeakSender<RoomCommand>) {
         let RoomState::InGame { game, number, .. } = &self.state else {
             return;
         };
@@ -524,7 +529,7 @@ impl Room {
     }
 
     // Start a fresh game with everyone who has a seat
-    fn start_game(&mut self, info: &GameInfo, me: &WeakSender<RoomCommand>) {
+    pub(super) fn start_game(&mut self, info: &GameInfo, me: &WeakSender<RoomCommand>) {
         self.games_started += 1;
         let number = self.games_started;
 
@@ -543,7 +548,7 @@ impl Room {
     }
 
     // Everyone connected is ready and there are enough of them: start the game vote
-    fn start_vote_if_ready(&mut self, me: &WeakSender<RoomCommand>) {
+    pub(super) fn start_vote_if_ready(&mut self, me: &WeakSender<RoomCommand>) {
         if !matches!(self.state, RoomState::Lobby) {
             return;
         }
@@ -570,7 +575,7 @@ impl Room {
     }
 
     // No need to wait out the timer once every connected player has picked a game
-    fn end_vote_if_everyone_voted(&mut self, me: &WeakSender<RoomCommand>) {
+    pub(super) fn end_vote_if_everyone_voted(&mut self, me: &WeakSender<RoomCommand>) {
         let RoomState::Voting { votes, .. } = &self.state else {
             return;
         };
@@ -628,7 +633,12 @@ impl Room {
     }
 
     // Carry out what a game asked for: send its messages and start its timers
-    fn run_game_ctx(&mut self, ctx: GameCtx, game_number: u32, me: &WeakSender<RoomCommand>) {
+    pub(super) fn run_game_ctx(
+        &mut self,
+        ctx: GameCtx,
+        game_number: u32,
+        me: &WeakSender<RoomCommand>,
+    ) {
         self.send_game_messages(ctx.outgoing);
         for (timer, after) in ctx.timers {
             remind(me, after, RoomCommand::GameTimer { game_number, timer });
@@ -640,7 +650,7 @@ impl Room {
     }
 
     // Every player gets the game as they are allowed to see it, never someone else's
-    fn send_game_views(&self) {
+    pub(super) fn send_game_views(&self) {
         for player in &self.players {
             self.send_game_view_to(player.id);
         }
@@ -657,7 +667,7 @@ impl Room {
     }
 
     // Send everyone what the game asked to send, each one wrapped as a game event
-    fn send_game_messages(&self, outgoing: Vec<Value>) {
+    pub(super) fn send_game_messages(&self, outgoing: Vec<Value>) {
         for event in outgoing {
             self.broadcast(&ServerMessage::GameEvent { event });
         }
@@ -688,1277 +698,4 @@ fn remind(me: &WeakSender<RoomCommand>, delay: Duration, command: RoomCommand) {
 // A closed connection can't receive, so ignore the error
 fn send(connection: &Connection, message: ServerMessage) {
     let _ = connection.send(message);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::games::Game;
-    use crate::games::GameInfo;
-    use crate::games::bad_takes::{
-        BadTakes, IDLE_JUDGE_DURATION, IDLE_PULL_DURATION, PULL_DURATION, REVEAL_DURATION,
-        answer_ids, deck,
-    };
-    use crate::games::dummy::{DUMMY_INFO, DummyGame};
-    use crate::protocol::RoomSettings;
-    use rand::SeedableRng;
-    use rand::rngs::StdRng;
-    use serde_json::json;
-    use std::collections::{BTreeMap, HashSet};
-    use tokio::sync::mpsc::UnboundedReceiver;
-
-    // Join a player and return their id and the messages their phone gets
-    async fn join(
-        room: &RoomHandle,
-        nickname: &str,
-        token: Option<String>,
-    ) -> (Option<u32>, UnboundedReceiver<ServerMessage>) {
-        let (connection, messages) = mpsc::unbounded_channel();
-        let (reply, player_id) = oneshot::channel();
-        room.send(RoomCommand::Join {
-            nickname: nickname.to_string(),
-            avatar: None,
-            token,
-            connection,
-            reply,
-        })
-        .await;
-        (player_id.await.unwrap(), messages)
-    }
-
-    // A room registered in its own map, like the server does it
-    fn spawn_room() -> (RoomHandle, RoomMap) {
-        let rooms = RoomMap::default();
-        let room = RoomHandle::spawn("KXTP".to_string(), rooms.clone());
-        rooms
-            .lock()
-            .unwrap()
-            .insert("KXTP".to_string(), room.clone());
-        (room, rooms)
-    }
-
-    async fn player_count(room: &RoomHandle) -> usize {
-        let (reply, count) = oneshot::channel();
-        room.send(RoomCommand::PlayerCount { reply }).await;
-        count.await.unwrap()
-    }
-
-    fn error_code(message: Option<ServerMessage>) -> String {
-        match message {
-            Some(ServerMessage::Error { code, .. }) => code,
-            _ => panic!("expected an error"),
-        }
-    }
-
-    // Everything this phone has been sent since it was last read
-    fn drain(messages: &mut UnboundedReceiver<ServerMessage>) -> Vec<ServerMessage> {
-        std::iter::from_fn(|| messages.try_recv().ok()).collect()
-    }
-
-    // The last game event this phone got
-    fn last_game_event(messages: &mut UnboundedReceiver<ServerMessage>) -> Option<Value> {
-        game_messages(messages).0.pop()
-    }
-
-    // The last game view this phone got
-    fn last_game_view(messages: &mut UnboundedReceiver<ServerMessage>) -> Option<Value> {
-        Some(game_messages(messages).1).filter(|view| !view.is_null())
-    }
-
-    // The game events this phone got, and the last view
-    fn game_messages(messages: &mut UnboundedReceiver<ServerMessage>) -> (Vec<Value>, Value) {
-        let (mut events, mut view) = (Vec::new(), Value::Null);
-        for message in drain(messages) {
-            match message {
-                ServerMessage::GameEvent { event } => events.push(event),
-                ServerMessage::GameView { view: latest, .. } => view = latest,
-                _ => {}
-            }
-        }
-        (events, view)
-    }
-
-    // Bad Takes dealt from a seeded deck, so the room tests get the same cards every run
-    fn bad_takes() -> GameInfo {
-        fn create(settings: &RoomSettings) -> Box<dyn Game> {
-            let cards = deck::starter_deck();
-            Box::new(BadTakes::new(
-                settings.points_to_win,
-                cards.prompts.clone(),
-                cards.answers.clone(),
-                StdRng::seed_from_u64(1),
-            ))
-        }
-        GameInfo {
-            create,
-            ..crate::games::bad_takes::info()
-        }
-    }
-
-    fn full_room() -> (Room, Vec<UnboundedReceiver<ServerMessage>>) {
-        let names: Vec<String> = (1..=MAX_ROOM_PLAYERS)
-            .map(|n| format!("Player {n}"))
-            .collect();
-        let names: Vec<&str> = names.iter().map(String::as_str).collect();
-        room_with(&names)
-    }
-
-    #[tokio::test]
-    async fn a_full_room_turns_new_players_away() {
-        let (mut room, _phones) = full_room();
-        let (_commands, me) = test_me();
-        let (connection, mut messages) = mpsc::unbounded_channel();
-
-        let joined = room.join("Late".to_string(), None, None, connection, &me);
-        assert_eq!(joined, None);
-        assert_eq!(error_code(messages.try_recv().ok()), "room_full");
-        assert_eq!(room.players.len(), MAX_ROOM_PLAYERS);
-    }
-
-    #[tokio::test]
-    async fn a_full_room_still_lets_players_back_in() {
-        let (mut room, _phones) = full_room();
-        let (_commands, me) = test_me();
-        let token = room.players[2].token.clone();
-        let (connection, _messages) = mpsc::unbounded_channel();
-
-        let joined = room.join("Player 3".to_string(), None, Some(token), connection, &me);
-        assert_eq!(joined, Some(3));
-    }
-
-    #[tokio::test]
-    async fn a_seat_frees_up_when_someone_leaves() {
-        let (mut room, _phones) = full_room();
-        let (_commands, me) = test_me();
-        room.leave(4, &me);
-        let (connection, _messages) = mpsc::unbounded_channel();
-
-        let joined = room.join("Late".to_string(), None, None, connection, &me);
-        assert!(joined.is_some());
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn a_full_round_of_bad_takes() {
-        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
-        let (commands, mut reminders) = mpsc::channel(16);
-        let me = commands.downgrade();
-        room.start_game(&bad_takes(), &me);
-
-        // Everyone gets 7 cards, Alex judges, and they all see the same prompt
-        let views: Vec<Value> = phones
-            .iter_mut()
-            .map(|phone| game_messages(phone).1)
-            .collect();
-        for view in &views {
-            assert_eq!(view["hand"].as_array().map(Vec::len), Some(7));
-            assert_eq!(view["judge"], 1);
-            assert_eq!(view["prompt"], views[0]["prompt"]);
-        }
-
-        // Sam and Kim play their first cards, one for each gap
-        let gaps = views[0]["prompt"]["pick"].as_u64().expect("pick") as usize;
-        for (player_id, view) in [(2, &views[1]), (3, &views[2])] {
-            let hand = view["hand"].as_array().expect("a hand");
-            let cards: Vec<&Value> = hand[..gaps].iter().map(|card| &card["id"]).collect();
-            room.game_action(player_id, json!({ "kind": "submit", "cards": cards }), &me);
-        }
-
-        // The answers go into the bag, and Alex pulls them out one at a time
-        let (_, alex_sees) = game_messages(&mut phones[0]);
-        assert_eq!(alex_sees["phase"], "reading");
-        assert_eq!(alex_sees["in_bag"], 2);
-        for _ in 0..2 {
-            room.game_action(1, json!({ "kind": "pull" }), &me);
-        }
-        room.game_action(1, json!({ "kind": "show_all" }), &me);
-
-        // Alex has read both answers, with no names, and picks the first
-        let (_, alex_sees) = game_messages(&mut phones[0]);
-        assert_eq!(alex_sees["phase"], "judging");
-        let answers = alex_sees["cards_to_judge"].as_array().expect("answers");
-        assert_eq!(answers.len(), 2);
-        let picked = answers[0][0]["id"].clone();
-        room.game_action(1, json!({ "kind": "pick", "card": picked }), &me);
-
-        // Everyone hears who won, and the winner has a point
-        let (events, kim_sees) = game_messages(&mut phones[2]);
-        let reveal = events.last().expect("the reveal");
-        assert_eq!(reveal["event"], "winner_revealed");
-        assert_eq!(reveal["cards"][0]["id"], picked);
-        let winner = reveal["winner"].as_u64().expect("a winner").to_string();
-        assert!(winner == "2" || winner == "3");
-        assert_eq!(kim_sees["scores"][&winner], 1);
-
-        // After the reveal the next round starts: Sam judges and every hand is full again
-        tokio::time::sleep(REVEAL_DURATION + Duration::from_secs(1)).await;
-        while let Ok(reminder) = reminders.try_recv() {
-            room.handle(reminder, &me);
-        }
-        for phone in &mut phones {
-            let (_, view) = game_messages(phone);
-            assert_eq!(view["round"], 2);
-            assert_eq!(view["judge"], 2);
-            assert_eq!(view["phase"], "submitting");
-            assert_eq!(view["hand"].as_array().map(Vec::len), Some(7));
-        }
-    }
-
-    // A player plays the first cards in their hand, one for each gap, and returns their ids
-    fn play_first_cards(
-        room: &mut Room,
-        player_id: u32,
-        view: &Value,
-        me: &WeakSender<RoomCommand>,
-    ) -> Vec<Value> {
-        let gaps = view["prompt"]["pick"].as_u64().expect("pick") as usize;
-        let hand = view["hand"].as_array().expect("a hand");
-        let cards: Vec<Value> = hand[..gaps].iter().map(|card| card["id"].clone()).collect();
-        room.game_action(player_id, json!({ "kind": "submit", "cards": cards }), me);
-        cards
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn a_slow_judge_gives_the_point_to_a_random_answer() {
-        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
-        let (commands, mut reminders) = mpsc::channel(16);
-        let me = commands.downgrade();
-        room.start_game(&bad_takes(), &me);
-        for player_id in [2, 3] {
-            let (_, view) = game_messages(&mut phones[player_id as usize - 1]);
-            play_first_cards(&mut room, player_id, &view, &me);
-        }
-
-        // Alex never taps: both cards come out, they're shown, then a random answer wins
-        for wait in [
-            PULL_DURATION,
-            IDLE_PULL_DURATION,
-            IDLE_PULL_DURATION,
-            IDLE_JUDGE_DURATION,
-        ] {
-            tokio::time::sleep(wait + Duration::from_secs(1)).await;
-            while let Ok(reminder) = reminders.try_recv() {
-                room.handle(reminder, &me);
-            }
-        }
-        let (events, view) = game_messages(&mut phones[0]);
-        let reveal = events.last().expect("the reveal");
-        assert_eq!(reveal["event"], "winner_revealed");
-        assert_eq!(reveal["judge_timed_out"], true);
-        let winner = reveal["winner"].as_u64().expect("a winner").to_string();
-        assert!(winner == "2" || winner == "3");
-        assert_eq!(view["scores"][&winner], 1);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn the_judge_leaving_cancels_the_round() {
-        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim", "Lee"]);
-        let (commands, _reminders) = mpsc::channel(16);
-        let me = commands.downgrade();
-        room.start_game(&bad_takes(), &me);
-        let (_, sam_sees) = game_messages(&mut phones[1]);
-        let sams_cards = play_first_cards(&mut room, 2, &sam_sees, &me);
-
-        // Alex, the judge, leaves before anyone wins
-        room.leave(1, &me);
-        let (events, view) = game_messages(&mut phones[1]);
-        assert!(events.contains(&json!({ "event": "round_cancelled" })));
-        assert_eq!(view["round"], 2);
-        assert_eq!(view["judge"], 2, "the next player judges");
-        let hand: Vec<&Value> = view["hand"]
-            .as_array()
-            .expect("a hand")
-            .iter()
-            .map(|card| &card["id"])
-            .collect();
-        assert_eq!(hand.len(), 7);
-        for card in &sams_cards {
-            assert!(hand.contains(&card), "Sam has his cards back");
-        }
-        assert_eq!(view["scores"], json!({ "2": 0, "3": 0, "4": 0 }));
-    }
-
-    // The time left in the last game view this phone got, if it got one
-    fn view_ends_in(messages: &mut UnboundedReceiver<ServerMessage>) -> Option<Option<u64>> {
-        drain(messages)
-            .into_iter()
-            .rev()
-            .find_map(|message| match message {
-                ServerMessage::GameView { ends_in, .. } => Some(ends_in),
-                _ => None,
-            })
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn game_views_say_how_long_the_countdown_has_left() {
-        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
-        let (commands, _reminders) = mpsc::channel(16);
-        let me = commands.downgrade();
-        room.start_game(&bad_takes(), &me);
-        assert_eq!(view_ends_in(&mut phones[0]), Some(Some(60)));
-
-        // Half a second gone still shows 60
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        room.send_game_views();
-        assert_eq!(view_ends_in(&mut phones[0]), Some(Some(60)));
-
-        tokio::time::sleep(Duration::from_secs(10)).await;
-        room.send_game_views();
-        assert_eq!(view_ends_in(&mut phones[0]), Some(Some(50)));
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn a_phone_coming_back_gets_the_time_left() {
-        let (mut room, _phones) = room_with(&["Alex", "Sam", "Kim"]);
-        let (commands, _reminders) = mpsc::channel(16);
-        let me = commands.downgrade();
-        room.start_game(&bad_takes(), &me);
-        tokio::time::sleep(Duration::from_secs(20)).await;
-
-        let token = room.players[1].token.clone();
-        let (connection, mut new_phone) = mpsc::unbounded_channel();
-        room.join("Sam".to_string(), None, Some(token), connection, &me);
-        assert_eq!(view_ends_in(&mut new_phone), Some(Some(40)));
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn the_countdown_follows_the_latest_timer() {
-        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
-        let (commands, _reminders) = mpsc::channel(16);
-        let me = commands.downgrade();
-        room.start_game(&bad_takes(), &me);
-        for player_id in [2, 3] {
-            let (_, view) = game_messages(&mut phones[player_id as usize - 1]);
-            play_first_cards(&mut room, player_id, &view, &me);
-        }
-        assert_eq!(view_ends_in(&mut phones[0]), Some(Some(15)), "the bag");
-
-        for _ in 0..2 {
-            room.game_action(1, json!({ "kind": "pull" }), &me);
-        }
-        room.game_action(1, json!({ "kind": "show_all" }), &me);
-        assert_eq!(view_ends_in(&mut phones[0]), Some(Some(45)), "the pick");
-
-        let (_, view) = game_messages(&mut phones[1]);
-        let card = view["cards_to_judge"][0][0]["id"].clone();
-        room.game_action(1, json!({ "kind": "pick", "card": card }), &me);
-        assert_eq!(view_ends_in(&mut phones[0]), Some(Some(4)), "the winner");
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn a_finished_game_has_no_countdown() {
-        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
-        let (commands, _reminders) = mpsc::channel(16);
-        let me = commands.downgrade();
-        room.start_game(&bad_takes(), &me);
-
-        // Too few players left, with most of the 60 seconds still to go
-        room.leave(3, &me);
-        assert_eq!(view_ends_in(&mut phones[0]), Some(None));
-    }
-
-    #[tokio::test]
-    async fn a_game_with_no_timer_has_no_countdown() {
-        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
-        room.state = RoomState::InGame {
-            game: Box::new(DummyGame::default()),
-            number: 1,
-            ends_at: None,
-        };
-
-        room.send_game_views();
-        assert_eq!(view_ends_in(&mut phones[0]), Some(None));
-    }
-
-    // Note the answer cards in everything each phone got, and keep its last view
-    fn read_all(
-        phones: &mut [UnboundedReceiver<ServerMessage>],
-        seen: &mut [HashSet<u64>],
-        views: &mut [Value],
-    ) {
-        for (index, phone) in phones.iter_mut().enumerate() {
-            for message in drain(phone) {
-                let json = serde_json::to_value(&message).expect("messages are JSON");
-                answer_ids(&json, &mut seen[index]);
-                if let ServerMessage::GameView { view, .. } = message {
-                    views[index] = view;
-                }
-            }
-        }
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn hands_are_never_sent_to_other_players() {
-        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim", "Lee"]);
-        let (commands, mut reminders) = mpsc::channel(16);
-        let me = commands.downgrade();
-        // Every answer card each phone was ever sent, and the last view it got
-        let mut seen = vec![HashSet::new(); phones.len()];
-        let mut views = vec![Value::Null; phones.len()];
-
-        // A whole round and the start of the next: deal, play, pull, judge, reveal, refill
-        room.start_game(&bad_takes(), &me);
-        read_all(&mut phones, &mut seen, &mut views);
-        for player_id in [2, 3, 4] {
-            play_first_cards(&mut room, player_id, &views[player_id as usize - 1], &me);
-        }
-        for _ in 0..3 {
-            room.game_action(1, json!({ "kind": "pull" }), &me);
-        }
-        room.game_action(1, json!({ "kind": "show_all" }), &me);
-        read_all(&mut phones, &mut seen, &mut views);
-        let picked = views[0]["cards_to_judge"][0][0]["id"].clone();
-        room.game_action(1, json!({ "kind": "pick", "card": picked }), &me);
-        tokio::time::sleep(REVEAL_DURATION + Duration::from_secs(1)).await;
-        while let Ok(reminder) = reminders.try_recv() {
-            room.handle(reminder, &me);
-        }
-        read_all(&mut phones, &mut seen, &mut views);
-        assert_eq!(views[0]["round"], 2);
-
-        // No card still in someone's hand ever reached another phone
-        for (owner, view) in views.iter().enumerate() {
-            for card in view["hand"].as_array().expect("a hand") {
-                let id = card["id"].as_u64().expect("a card id");
-                for (reader, cards) in seen.iter().enumerate() {
-                    if reader != owner {
-                        assert!(!cards.contains(&id), "phone {reader} got {}", card["text"]);
-                    }
-                }
-            }
-        }
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn finished_game_shows_results_then_the_lobby() {
-        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
-        let (commands, mut reminders) = mpsc::channel(8);
-        let me = commands.downgrade();
-        room.start_game(&DUMMY_INFO, &me);
-
-        // Three presses win the dummy game
-        for _ in 0..3 {
-            room.game_action(1, json!({ "kind": "press" }), &me);
-        }
-        room.finish_game_if_over(&me);
-        assert!(matches!(room.state, RoomState::Results { number: 1 }));
-        let mut got_results = false;
-        while let Ok(message) = phones[1].try_recv() {
-            got_results |= matches!(message, ServerMessage::Results { ends_in: 10 });
-        }
-        assert!(got_results);
-
-        // After 21 seconds only the results reminder is due, the game's 30 second limit isn't
-        tokio::time::sleep(RESULTS_DURATION + Duration::from_secs(1)).await;
-        while let Ok(reminder) = reminders.try_recv() {
-            room.handle(reminder, &me);
-        }
-        assert!(matches!(room.state, RoomState::Lobby));
-        assert!(matches!(
-            phones[1].try_recv(),
-            Ok(ServerMessage::Lobby { .. })
-        ));
-    }
-
-    #[tokio::test]
-    async fn after_a_game_nobody_is_ready_and_no_vote_starts() {
-        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
-        let (_commands, me) = test_me();
-
-        // A whole round: everyone ready, vote, game, results
-        start_vote(&mut room, &me);
-        for player_id in 1..=3 {
-            room.vote(player_id, "dummy");
-        }
-        room.end_vote_if_everyone_voted(&me);
-        for _ in 0..3 {
-            room.game_action(1, json!({ "kind": "press" }), &me);
-        }
-        room.finish_game_if_over(&me);
-        room.handle(RoomCommand::ResultsOver { number: 1 }, &me);
-
-        assert!(matches!(room.state, RoomState::Lobby));
-        assert!(room.players.iter().all(|player| !player.ready));
-        room.start_vote_if_ready(&me);
-        assert!(
-            matches!(room.state, RoomState::Lobby),
-            "no vote until they're ready"
-        );
-
-        let mut last_lobby = None;
-        while let Ok(message) = phones[2].try_recv() {
-            if let ServerMessage::Lobby { players, .. } = message {
-                last_lobby = Some(players);
-            }
-        }
-        let players = last_lobby.expect("a lobby update");
-        assert!(players.iter().all(|player| !player.ready));
-    }
-
-    #[tokio::test]
-    async fn unfinished_game_keeps_going() {
-        let (mut room, _phones) = room_with(&["Alex", "Sam", "Kim"]);
-        let (_commands, me) = test_me();
-        room.start_game(&DUMMY_INFO, &me);
-        room.game_action(1, json!({ "kind": "press" }), &me);
-
-        room.finish_game_if_over(&me);
-        assert!(matches!(room.state, RoomState::InGame { .. }));
-    }
-
-    #[tokio::test]
-    async fn old_results_timer_is_ignored() {
-        let (mut room, _phones) = room_with(&["Alex", "Sam", "Kim"]);
-        let (_commands, me) = test_me();
-        room.state = RoomState::Results { number: 2 };
-
-        room.handle(RoomCommand::ResultsOver { number: 1 }, &me);
-        assert!(matches!(room.state, RoomState::Results { number: 2 }));
-    }
-
-    #[tokio::test]
-    async fn everyone_gets_their_own_view_after_each_game_event() {
-        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
-        let (_commands, me) = test_me();
-
-        room.start_game(&DUMMY_INFO, &me);
-        for phone in &mut phones {
-            assert_eq!(last_game_view(phone), Some(json!({ "presses": 0 })));
-        }
-
-        room.game_action(1, json!({ "kind": "press" }), &me);
-        assert_eq!(
-            last_game_view(&mut phones[0]),
-            Some(json!({ "presses": 1 }))
-        );
-        // Sam and Kim get a fresh view too, still showing only their own presses
-        assert_eq!(
-            last_game_view(&mut phones[1]),
-            Some(json!({ "presses": 0 }))
-        );
-        assert_eq!(
-            last_game_view(&mut phones[2]),
-            Some(json!({ "presses": 0 }))
-        );
-    }
-
-    #[tokio::test]
-    async fn refused_action_sends_no_views() {
-        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
-        let (_commands, me) = test_me();
-        room.start_game(&DUMMY_INFO, &me);
-        last_game_view(&mut phones[1]);
-
-        room.game_action(1, json!({ "kind": "dance" }), &me);
-        assert_eq!(last_game_view(&mut phones[1]), None);
-    }
-
-    #[tokio::test]
-    async fn refused_game_action_is_explained() {
-        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
-        let (_commands, me) = test_me();
-        room.start_game(&DUMMY_INFO, &me);
-        while phones[0].try_recv().is_ok() {}
-
-        room.game_action(1, json!({ "kind": "dance" }), &me);
-        assert_eq!(error_code(phones[0].try_recv().ok()), "unknown_action");
-    }
-
-    #[test]
-    fn game_action_outside_a_game_is_refused() {
-        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
-        let (_commands, me) = test_me();
-        while phones[0].try_recv().is_ok() {}
-
-        room.game_action(1, json!({ "kind": "press" }), &me);
-        assert_eq!(error_code(phones[0].try_recv().ok()), "not_in_game");
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn starting_a_game_runs_its_start() {
-        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
-        let (commands, mut receiver) = mpsc::channel(8);
-        room.start_game(&DUMMY_INFO, &commands.downgrade());
-
-        assert!(matches!(room.state, RoomState::InGame { number: 1, .. }));
-        for phone in &mut phones {
-            let mut got_started = false;
-            while let Ok(message) = phone.try_recv() {
-                if let ServerMessage::GameEvent { event } = message {
-                    got_started = event == json!({ "event": "started" });
-                }
-            }
-            assert!(got_started, "every player hears the game start");
-        }
-
-        // The dummy game's 30 second time limit was scheduled for game 1
-        tokio::time::sleep(Duration::from_secs(31)).await;
-        assert!(matches!(
-            receiver.try_recv(),
-            Ok(RoomCommand::GameTimer {
-                game_number: 1,
-                timer: 1
-            })
-        ));
-    }
-
-    #[tokio::test]
-    async fn each_game_gets_a_new_number() {
-        let (mut room, _phones) = room_with(&["Alex", "Sam", "Kim"]);
-        let (commands, _receiver) = mpsc::channel(8);
-        room.start_game(&DUMMY_INFO, &commands.downgrade());
-        room.start_game(&DUMMY_INFO, &commands.downgrade());
-        assert!(matches!(room.state, RoomState::InGame { number: 2, .. }));
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn game_timer_fires_after_its_delay() {
-        let mut room = Room::new("KXTP".to_string());
-        let (commands, mut receiver) = mpsc::channel(8);
-
-        let mut ctx = GameCtx::default();
-        ctx.start_timer(7, Duration::from_secs(60));
-        room.run_game_ctx(ctx, 1, &commands.downgrade());
-
-        tokio::time::sleep(Duration::from_secs(59)).await;
-        assert!(receiver.try_recv().is_err(), "not yet");
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        assert!(matches!(
-            receiver.try_recv(),
-            Ok(RoomCommand::GameTimer {
-                game_number: 1,
-                timer: 7
-            })
-        ));
-    }
-
-    #[test]
-    fn game_timer_only_reaches_the_game_that_asked() {
-        let mut room = Room::new("KXTP".to_string());
-        let (connection, mut messages) = mpsc::unbounded_channel();
-        room.add_player("Alex".to_string(), None, connection);
-        room.state = RoomState::InGame {
-            game: Box::new(DummyGame::default()),
-            number: 2,
-            ends_at: None,
-        };
-        let (commands, _receiver) = mpsc::channel(8);
-        let me = commands.downgrade();
-
-        // A timer from an earlier game is ignored
-        room.handle(
-            RoomCommand::GameTimer {
-                game_number: 1,
-                timer: 1,
-            },
-            &me,
-        );
-        assert!(messages.try_recv().is_err());
-
-        room.handle(
-            RoomCommand::GameTimer {
-                game_number: 2,
-                timer: 1,
-            },
-            &me,
-        );
-        assert!(matches!(
-            messages.try_recv(),
-            Ok(ServerMessage::GameEvent { event }) if event == json!({ "event": "time_up" })
-        ));
-    }
-
-    // A way for code under test to remind the room, kept alive by the returned sender
-    fn test_me() -> (mpsc::Sender<RoomCommand>, WeakSender<RoomCommand>) {
-        let (commands, _receiver) = mpsc::channel(8);
-        let me = commands.downgrade();
-        (commands, me)
-    }
-
-    // Everyone in the room presses ready and the vote starts
-    fn start_vote(room: &mut Room, me: &WeakSender<RoomCommand>) {
-        let ids: Vec<u32> = room.players.iter().map(|player| player.id).collect();
-        for player_id in ids {
-            room.set_ready(player_id, true);
-        }
-        room.start_vote_if_ready(me);
-        assert!(matches!(room.state, RoomState::Voting { .. }));
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn vote_state_says_when_voting_ends() {
-        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
-        let (_commands, me) = test_me();
-        start_vote(&mut room, &me);
-
-        let mut ends_in = None;
-        while let Ok(message) = phones[0].try_recv() {
-            if let ServerMessage::VoteState {
-                ends_in: seconds, ..
-            } = message
-            {
-                ends_in = Some(seconds);
-            }
-        }
-        assert_eq!(ends_in, Some(30));
-    }
-
-    #[tokio::test]
-    async fn vote_ends_when_everyone_voted() {
-        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
-        let (_commands, me) = test_me();
-        start_vote(&mut room, &me);
-
-        room.vote(1, "dummy");
-        room.vote(2, "dummy");
-        room.end_vote_if_everyone_voted(&me);
-        assert!(
-            matches!(room.state, RoomState::Voting { .. }),
-            "Kim hasn't voted"
-        );
-
-        room.vote(3, "dummy");
-        room.end_vote_if_everyone_voted(&me);
-        assert!(matches!(room.state, RoomState::InGame { .. }));
-
-        let mut result = None;
-        while let Ok(message) = phones[1].try_recv() {
-            if let ServerMessage::VoteResult { game, tie_break } = message {
-                result = Some((game, tie_break));
-            }
-        }
-        assert_eq!(result, Some(("dummy".to_string(), false)));
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn vote_ends_after_30_seconds() {
-        let (mut room, _phones) = room_with(&["Alex", "Sam", "Kim"]);
-        let (commands, mut reminders) = mpsc::channel(8);
-        let me = commands.downgrade();
-        start_vote(&mut room, &me);
-        room.vote(1, "dummy");
-
-        tokio::time::sleep(Duration::from_secs(29)).await;
-        assert!(reminders.try_recv().is_err(), "still voting");
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        let timeout = reminders.try_recv().expect("the time limit");
-        room.handle(timeout, &me);
-
-        // Alex's single vote is enough to win
-        assert!(matches!(room.state, RoomState::InGame { .. }));
-    }
-
-    #[tokio::test]
-    async fn nobody_voting_goes_back_to_the_lobby() {
-        let (mut room, _phones) = room_with(&["Alex", "Sam", "Kim"]);
-        let (_commands, me) = test_me();
-        start_vote(&mut room, &me);
-
-        room.handle(RoomCommand::VoteTimeout { number: 1 }, &me);
-        assert!(matches!(room.state, RoomState::Lobby));
-        assert!(room.players.iter().all(|player| !player.ready));
-    }
-
-    #[tokio::test]
-    async fn old_vote_time_limit_is_ignored() {
-        let (mut room, _phones) = room_with(&["Alex", "Sam", "Kim"]);
-        let (_commands, me) = test_me();
-        start_vote(&mut room, &me);
-
-        room.handle(RoomCommand::VoteTimeout { number: 99 }, &me);
-        assert!(matches!(room.state, RoomState::Voting { .. }));
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn unanswered_vote_returns_the_room_to_the_lobby() {
-        let (room, _rooms) = spawn_room();
-        let mut phones = Vec::new();
-        for nickname in ["Alex", "Sam", "Kim"] {
-            let (player_id, messages) = join(&room, nickname, None).await;
-            phones.push(messages);
-            room.send(RoomCommand::Ready {
-                player_id: player_id.unwrap(),
-                ready: true,
-            })
-            .await;
-        }
-
-        tokio::time::sleep(VOTE_DURATION + Duration::from_secs(1)).await;
-        player_count(&room).await;
-
-        // The last thing Alex hears is the lobby, with nobody ready
-        let mut last = None;
-        while let Ok(message) = phones[0].try_recv() {
-            last = Some(message);
-        }
-        let Some(ServerMessage::Lobby { players, .. }) = last else {
-            panic!("expected the lobby");
-        };
-        assert!(players.iter().all(|player| !player.ready));
-    }
-
-    // A room with these players in it, and their phones' messages
-    fn room_with(nicknames: &[&str]) -> (Room, Vec<UnboundedReceiver<ServerMessage>>) {
-        let mut room = Room::new("KXTP".to_string());
-        room.games = std::slice::from_ref(&DUMMY_INFO);
-        let mut phones = Vec::new();
-        for nickname in nicknames {
-            let (connection, messages) = mpsc::unbounded_channel();
-            room.add_player(nickname.to_string(), None, connection);
-            phones.push(messages);
-        }
-        (room, phones)
-    }
-
-    fn got_vote_state(messages: &mut UnboundedReceiver<ServerMessage>) -> bool {
-        // Skip lobby updates
-        while let Ok(message) = messages.try_recv() {
-            if matches!(message, ServerMessage::VoteState { .. }) {
-                return true;
-            }
-        }
-        false
-    }
-
-    #[tokio::test]
-    async fn vote_starts_when_everyone_is_ready() {
-        let (_commands, me) = test_me();
-        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
-        room.set_ready(1, true);
-        room.set_ready(2, true);
-        room.start_vote_if_ready(&me);
-        assert!(
-            matches!(room.state, RoomState::Lobby),
-            "Kim isn't ready yet"
-        );
-
-        room.set_ready(3, true);
-        room.start_vote_if_ready(&me);
-        assert!(matches!(room.state, RoomState::Voting { .. }));
-        for phone in &mut phones {
-            assert!(got_vote_state(phone));
-        }
-    }
-
-    #[tokio::test]
-    async fn two_players_are_not_enough() {
-        let (_commands, me) = test_me();
-        let (mut room, _phones) = room_with(&["Alex", "Sam"]);
-        room.set_ready(1, true);
-        room.set_ready(2, true);
-        room.start_vote_if_ready(&me);
-        assert!(matches!(room.state, RoomState::Lobby));
-    }
-
-    #[tokio::test]
-    async fn disconnected_player_does_not_hold_up_the_vote() {
-        let (_commands, me) = test_me();
-        let (mut room, _phones) = room_with(&["Alex", "Sam", "Kim", "Lee"]);
-        room.player_mut(4)
-            .expect("Lee is in the room")
-            .disconnected_since = Some(Instant::now());
-        for player_id in 1..=3 {
-            room.set_ready(player_id, true);
-        }
-        room.start_vote_if_ready(&me);
-        assert!(matches!(room.state, RoomState::Voting { .. }));
-    }
-
-    // The votes in the newest vote_state this phone got
-    fn latest_votes(
-        messages: &mut UnboundedReceiver<ServerMessage>,
-    ) -> Option<BTreeMap<&'static str, Vec<u32>>> {
-        let mut latest = None;
-        while let Ok(message) = messages.try_recv() {
-            if let ServerMessage::VoteState { votes, .. } = message {
-                latest = Some(votes);
-            }
-        }
-        latest
-    }
-
-    fn voting_room(nicknames: &[&str]) -> (Room, Vec<UnboundedReceiver<ServerMessage>>) {
-        let (mut room, phones) = room_with(nicknames);
-        room.state = RoomState::Voting {
-            votes: HashMap::new(),
-            number: 1,
-            ends_at: Instant::now(),
-        };
-        (room, phones)
-    }
-
-    #[test]
-    fn votes_are_shown_to_everyone() {
-        let (mut room, mut phones) = voting_room(&["Alex", "Sam", "Kim"]);
-        room.vote(3, "dummy");
-        room.vote(1, "dummy");
-
-        for phone in &mut phones {
-            let votes = latest_votes(phone).expect("a vote_state");
-            assert_eq!(votes, BTreeMap::from([("dummy", vec![1, 3])]));
-        }
-    }
-
-    #[test]
-    fn wrong_votes_are_refused() {
-        let (mut room, mut phones) = voting_room(&["Alex", "Sam"]);
-        room.vote(1, "chess");
-        assert_eq!(error_code(phones[0].try_recv().ok()), "unknown_game");
-        // The dummy game needs 3 players
-        room.vote(1, "dummy");
-        assert_eq!(error_code(phones[0].try_recv().ok()), "game_not_available");
-
-        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
-        room.vote(1, "dummy");
-        assert_eq!(error_code(phones[0].try_recv().ok()), "not_voting");
-    }
-
-    #[test]
-    fn leaving_takes_back_the_vote() {
-        let (mut room, mut phones) = voting_room(&["Alex", "Sam", "Kim", "Lee"]);
-        let (_commands, me) = test_me();
-        room.vote(4, "dummy");
-        room.leave(4, &me);
-
-        let votes = latest_votes(&mut phones[0]).expect("a vote_state");
-        assert!(votes.is_empty());
-    }
-
-    #[tokio::test]
-    async fn the_game_hears_when_someone_leaves_for_good() {
-        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim", "Lee"]);
-        let (_commands, me) = test_me();
-        room.start_game(&DUMMY_INFO, &me);
-        last_game_event(&mut phones[0]);
-
-        room.leave(4, &me);
-        assert_eq!(
-            last_game_event(&mut phones[0]),
-            Some(json!({ "event": "left", "player": 4 }))
-        );
-
-        room.remove_by_host(1, 3, false, &me);
-        room.finish_game_if_over(&me);
-        // Kim was kicked, two players are too few, so the game ends
-        assert!(matches!(room.state, RoomState::Results { .. }));
-    }
-
-    #[tokio::test]
-    async fn the_game_hears_when_a_grace_period_runs_out() {
-        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim", "Lee"]);
-        let (_commands, me) = test_me();
-        room.start_game(&DUMMY_INFO, &me);
-        let since = Instant::now();
-        room.player_mut(4)
-            .expect("Lee is in the room")
-            .disconnected_since = Some(since);
-        last_game_event(&mut phones[0]);
-
-        room.handle(
-            RoomCommand::GraceOver {
-                player_id: 4,
-                since,
-            },
-            &me,
-        );
-        assert_eq!(
-            last_game_event(&mut phones[0]),
-            Some(json!({ "event": "left", "player": 4 }))
-        );
-    }
-
-    #[tokio::test]
-    async fn late_joiner_is_passed_to_the_game() {
-        let (mut room, _phones) = room_with(&["Alex", "Sam", "Kim"]);
-        let (_commands, me) = test_me();
-        room.start_game(&DUMMY_INFO, &me);
-
-        let (connection, mut messages) = mpsc::unbounded_channel();
-        let lee = room
-            .join("Lee".to_string(), None, None, connection, &me)
-            .expect("Lee joins");
-        assert_eq!(last_game_view(&mut messages), Some(json!({ "presses": 0 })));
-
-        // The dummy game lets late joiners play at once
-        room.game_action(lee, json!({ "kind": "press" }), &me);
-        assert_eq!(last_game_view(&mut messages), Some(json!({ "presses": 1 })));
-    }
-
-    #[tokio::test]
-    async fn reconnecting_mid_game_shows_the_game_at_once() {
-        let (mut room, _phones) = room_with(&["Alex", "Sam", "Kim"]);
-        let (_commands, me) = test_me();
-        room.start_game(&DUMMY_INFO, &me);
-        room.game_action(1, json!({ "kind": "press" }), &me);
-        let token = room.players[0].token.clone();
-
-        let (connection, mut messages) = mpsc::unbounded_channel();
-        room.join("Alex".to_string(), None, Some(token), connection, &me);
-        assert_eq!(last_game_view(&mut messages), Some(json!({ "presses": 1 })));
-    }
-
-    #[test]
-    fn joining_during_the_vote_shows_the_vote() {
-        let (mut room, _phones) = voting_room(&["Alex", "Sam", "Kim"]);
-        let (_commands, me) = test_me();
-        room.vote(1, "dummy");
-
-        let (connection, mut messages) = mpsc::unbounded_channel();
-        let lee = room.join("Lee".to_string(), None, None, connection, &me);
-        assert!(lee.is_some());
-        let votes = latest_votes(&mut messages).expect("Lee gets the vote");
-        assert_eq!(votes, BTreeMap::from([("dummy", vec![1])]));
-    }
-
-    // Two games that both fit 3 to 10 players
-    static TWO_GAMES: [GameInfo; 2] = [
-        GameInfo {
-            id: "first",
-            name: "First",
-            description: "A game for tests",
-            min_players: 3,
-            max_players: 10,
-            create: crate::games::dummy::create,
-        },
-        GameInfo {
-            id: "second",
-            name: "Second",
-            description: "Another game for tests",
-            min_players: 3,
-            max_players: 10,
-            create: crate::games::dummy::create,
-        },
-    ];
-
-    #[test]
-    fn changing_a_vote_moves_it() {
-        let (mut room, mut phones) = voting_room(&["Alex", "Sam", "Kim"]);
-        room.games = &TWO_GAMES;
-        room.vote(1, "first");
-        room.vote(2, "first");
-        room.vote(1, "second");
-
-        let votes = latest_votes(&mut phones[2]).expect("a vote_state");
-        assert_eq!(
-            votes,
-            BTreeMap::from([("first", vec![2]), ("second", vec![1])])
-        );
-    }
-
-    #[test]
-    fn votes_are_refused_once_voting_ends() {
-        let (mut room, mut phones) = voting_room(&["Alex", "Sam", "Kim"]);
-        room.vote(1, "dummy");
-        latest_votes(&mut phones[0]);
-
-        room.state = RoomState::Lobby;
-        room.vote(1, "dummy");
-        assert_eq!(error_code(phones[0].try_recv().ok()), "not_voting");
-    }
-
-    #[test]
-    fn ready_only_changes_in_the_lobby() {
-        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
-        room.state = RoomState::Voting {
-            votes: HashMap::new(),
-            number: 1,
-            ends_at: Instant::now(),
-        };
-        room.set_ready(1, true);
-        assert_eq!(error_code(phones[0].try_recv().ok()), "not_in_lobby");
-    }
-
-    #[tokio::test]
-    async fn ready_players_get_the_vote_through_the_room_task() {
-        let (room, _rooms) = spawn_room();
-        let mut phones = Vec::new();
-        for nickname in ["Alex", "Sam", "Kim"] {
-            let (player_id, messages) = join(&room, nickname, None).await;
-            phones.push(messages);
-            room.send(RoomCommand::Ready {
-                player_id: player_id.unwrap(),
-                ready: true,
-            })
-            .await;
-        }
-        // Ask something so every command above has been handled
-        player_count(&room).await;
-        for phone in &mut phones {
-            assert!(got_vote_state(phone));
-        }
-    }
-
-    #[test]
-    fn game_messages_reach_everyone() {
-        let (room, mut phones) = room_with(&["Alex", "Sam"]);
-        let mut ctx = GameCtx::default();
-        ctx.broadcast(json!({ "round": 1 }));
-        room.send_game_messages(ctx.outgoing);
-
-        for phone in &mut phones {
-            assert!(matches!(
-                phone.try_recv(),
-                Ok(ServerMessage::GameEvent { event }) if event == json!({ "round": 1 })
-            ));
-        }
-    }
-
-    #[test]
-    fn points_to_win_only_change_in_the_lobby() {
-        let mut room = Room::new("KXTP".to_string());
-        let (connection, mut messages) = mpsc::unbounded_channel();
-        let alex = room.add_player("Alex".to_string(), None, connection).id;
-
-        room.state = RoomState::Voting {
-            votes: HashMap::new(),
-            number: 1,
-            ends_at: Instant::now(),
-        };
-        room.set_points_to_win(alex, 10);
-        assert_eq!(error_code(messages.try_recv().ok()), "not_in_lobby");
-        assert_eq!(room.settings.points_to_win, 7);
-
-        room.state = RoomState::Lobby;
-        room.set_points_to_win(alex, 10);
-        assert_eq!(room.settings.points_to_win, 10);
-    }
-
-    #[tokio::test]
-    async fn join_gets_welcome_then_lobby() {
-        let (room, _rooms) = spawn_room();
-        let (alex, mut messages) = join(&room, "Alex", None).await;
-
-        assert_eq!(alex, Some(1));
-        assert!(matches!(
-            messages.recv().await,
-            Some(ServerMessage::Welcome { player_id: 1, .. })
-        ));
-        assert!(matches!(
-            messages.recv().await,
-            Some(ServerMessage::Lobby { .. })
-        ));
-    }
-
-    #[tokio::test]
-    async fn taken_nickname_is_refused() {
-        let (room, _rooms) = spawn_room();
-        join(&room, "Alex", None).await;
-        let (player_id, mut messages) = join(&room, "alex", None).await;
-
-        assert_eq!(player_id, None);
-        assert_eq!(error_code(messages.recv().await), "nickname_taken");
-    }
-
-    #[tokio::test]
-    async fn only_the_host_can_kick() {
-        let (room, _rooms) = spawn_room();
-        join(&room, "Alex", None).await;
-        let (sam, mut sam_messages) = join(&room, "Sam", None).await;
-        let sam = sam.unwrap();
-        // Skip Sam's welcome and lobby
-        sam_messages.recv().await;
-        sam_messages.recv().await;
-
-        room.send(RoomCommand::Remove {
-            player_id: sam,
-            target_id: 1,
-            ban: false,
-        })
-        .await;
-        assert_eq!(error_code(sam_messages.recv().await), "not_host");
-        assert_eq!(player_count(&room).await, 2);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn a_disconnect_tells_everyone_the_time_left() {
-        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
-        let (_commands, me) = test_me();
-        let sams_connection = room.players[1].sender.clone();
-
-        room.disconnect(2, &sams_connection, &me);
-        let players = drain(&mut phones[0])
-            .into_iter()
-            .rev()
-            .find_map(|message| match message {
-                ServerMessage::Lobby { players, .. } => Some(players),
-                _ => None,
-            })
-            .expect("a lobby message");
-        assert_eq!(players[1].reconnect_in, Some(90));
-        assert_eq!(players[0].reconnect_in, None);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn disconnected_player_is_removed_after_grace() {
-        let (room, _rooms) = spawn_room();
-        let (connection, _messages) = mpsc::unbounded_channel();
-        let (reply, player_id) = oneshot::channel();
-        room.send(RoomCommand::Join {
-            nickname: "Sam".to_string(),
-            avatar: None,
-            token: None,
-            connection: connection.clone(),
-            reply,
-        })
-        .await;
-        let sam = player_id.await.unwrap().unwrap();
-
-        room.send(RoomCommand::Disconnect {
-            player_id: sam,
-            connection,
-        })
-        .await;
-        tokio::time::sleep(DISCONNECT_GRACE - Duration::from_secs(1)).await;
-        assert_eq!(
-            player_count(&room).await,
-            1,
-            "still within the grace period"
-        );
-
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        assert_eq!(player_count(&room).await, 0);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn empty_room_deletes_itself_after_5_minutes() {
-        let (room, rooms) = spawn_room();
-
-        tokio::time::sleep(EMPTY_ROOM_LIFETIME - Duration::from_secs(1)).await;
-        assert!(rooms.lock().unwrap().contains_key("KXTP"));
-
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        assert!(!rooms.lock().unwrap().contains_key("KXTP"));
-        assert!(
-            !room.send(RoomCommand::Leave { player_id: 1 }).await,
-            "the task has ended"
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn room_with_a_connected_player_is_kept() {
-        let (room, rooms) = spawn_room();
-        let (_alex, _messages) = join(&room, "Alex", None).await;
-
-        tokio::time::sleep(EMPTY_ROOM_LIFETIME * 2).await;
-        assert!(rooms.lock().unwrap().contains_key("KXTP"));
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn someone_joining_stops_the_countdown() {
-        let (room, rooms) = spawn_room();
-        tokio::time::sleep(Duration::from_secs(200)).await;
-
-        // Alex is there from 200s to 300s, then the room is empty again
-        let (alex, _messages) = join(&room, "Alex", None).await;
-        tokio::time::sleep(Duration::from_secs(100)).await;
-        room.send(RoomCommand::Leave {
-            player_id: alex.unwrap(),
-        })
-        .await;
-
-        // The first countdown would have ended at 300s, the new one ends at 600s
-        tokio::time::sleep(Duration::from_secs(250)).await;
-        assert!(rooms.lock().unwrap().contains_key("KXTP"));
-        tokio::time::sleep(Duration::from_secs(60)).await;
-        assert!(!rooms.lock().unwrap().contains_key("KXTP"));
-    }
 }
