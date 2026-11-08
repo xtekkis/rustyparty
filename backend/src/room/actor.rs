@@ -12,7 +12,7 @@ use super::{
     DISCONNECT_GRACE, MAX_ROOM_PLAYERS, Room, RoomState, clean_nickname, is_valid_points_to_win,
     seconds_until,
 };
-use crate::games::{GameCtx, GameInfo, Outgoing, Recipient, TimerId, find_game};
+use crate::games::{GameCtx, GameInfo, TimerId, find_game};
 use crate::protocol::ServerMessage;
 use serde_json::Value;
 
@@ -656,14 +656,10 @@ impl Room {
         self.send_to_player(player_id, ServerMessage::GameView { view, ends_in });
     }
 
-    // Send what a game asked to send, each one wrapped as a game event
-    fn send_game_messages(&self, outgoing: Vec<Outgoing>) {
-        for Outgoing { to, message } in outgoing {
-            let message = ServerMessage::GameEvent { event: message };
-            match to {
-                Recipient::Player(player_id) => self.send_to_player(player_id, message),
-                Recipient::Everyone => self.broadcast(&message),
-            }
+    // Send everyone what the game asked to send, each one wrapped as a game event
+    fn send_game_messages(&self, outgoing: Vec<Value>) {
+        for event in outgoing {
+            self.broadcast(&ServerMessage::GameEvent { event });
         }
     }
 
@@ -1257,23 +1253,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn game_action_reaches_the_game() {
-        let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
-        let (_commands, me) = test_me();
-        room.start_game(&DUMMY_INFO, &me);
-        for phone in &mut phones {
-            last_game_event(phone);
-        }
-
-        room.game_action(1, json!({ "kind": "press" }), &me);
-        assert_eq!(
-            last_game_event(&mut phones[0]),
-            Some(json!({ "presses": 1 }))
-        );
-        assert_eq!(last_game_event(&mut phones[1]), None, "only Alex hears it");
-    }
-
-    #[tokio::test]
     async fn refused_game_action_is_explained() {
         let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
         let (_commands, me) = test_me();
@@ -1809,31 +1788,18 @@ mod tests {
     }
 
     #[test]
-    fn game_messages_reach_the_right_players() {
-        let mut room = Room::new("KXTP".to_string());
-        let (alex_connection, mut alex_messages) = mpsc::unbounded_channel();
-        let (sam_connection, mut sam_messages) = mpsc::unbounded_channel();
-        let alex = room
-            .add_player("Alex".to_string(), None, alex_connection)
-            .id;
-        room.add_player("Sam".to_string(), None, sam_connection);
-
+    fn game_messages_reach_everyone() {
+        let (room, mut phones) = room_with(&["Alex", "Sam"]);
         let mut ctx = GameCtx::default();
-        ctx.send_to(alex, json!({ "hand": [12] }));
         ctx.broadcast(json!({ "round": 1 }));
         room.send_game_messages(ctx.outgoing);
 
-        let event = |message| match message {
-            Ok(ServerMessage::GameEvent { event }) => event,
-            _ => panic!("expected a game event"),
-        };
-        assert_eq!(event(alex_messages.try_recv()), json!({ "hand": [12] }));
-        assert_eq!(event(alex_messages.try_recv()), json!({ "round": 1 }));
-        assert_eq!(event(sam_messages.try_recv()), json!({ "round": 1 }));
-        assert!(
-            sam_messages.try_recv().is_err(),
-            "Sam doesn't get Alex's hand"
-        );
+        for phone in &mut phones {
+            assert!(matches!(
+                phone.try_recv(),
+                Ok(ServerMessage::GameEvent { event }) if event == json!({ "round": 1 })
+            ));
+        }
     }
 
     #[test]

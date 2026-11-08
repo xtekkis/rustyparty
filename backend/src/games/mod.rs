@@ -19,39 +19,17 @@ pub struct GameError {
     pub message: &'static str,
 }
 
-// Who a game message is for
-#[derive(Debug, PartialEq)]
-pub enum Recipient {
-    Player(PlayerId),
-    Everyone,
-}
-
-#[derive(Debug, PartialEq)]
-pub struct Outgoing {
-    pub to: Recipient,
-    pub message: Value,
-}
-
-// What a game asks the room to do: messages to send and timers to start
+// What a game asks the room to do: messages for everyone and timers to start
 #[derive(Default)]
 pub struct GameCtx {
-    pub outgoing: Vec<Outgoing>,
+    pub outgoing: Vec<Value>,
     pub timers: Vec<(TimerId, Duration)>,
 }
 
 impl GameCtx {
-    pub fn send_to(&mut self, player: PlayerId, message: Value) {
-        self.outgoing.push(Outgoing {
-            to: Recipient::Player(player),
-            message,
-        });
-    }
-
+    // Everyone gets it. What only one player may see goes in their view instead
     pub fn broadcast(&mut self, message: Value) {
-        self.outgoing.push(Outgoing {
-            to: Recipient::Everyone,
-            message,
-        });
+        self.outgoing.push(message);
     }
 
     // The room calls handle_timer with this id once the time is up
@@ -122,21 +100,15 @@ mod tests {
     #[test]
     fn ctx_collects_messages_and_timers_in_order() {
         let mut ctx = GameCtx::default();
-        ctx.send_to(2, json!({ "hand": [12, 40] }));
         ctx.broadcast(json!({ "round": 1 }));
+        ctx.broadcast(json!({ "event": "submitted", "player": 2 }));
         ctx.start_timer(1, Duration::from_secs(60));
 
         assert_eq!(
             ctx.outgoing,
             [
-                Outgoing {
-                    to: Recipient::Player(2),
-                    message: json!({ "hand": [12, 40] }),
-                },
-                Outgoing {
-                    to: Recipient::Everyone,
-                    message: json!({ "round": 1 }),
-                },
+                json!({ "round": 1 }),
+                json!({ "event": "submitted", "player": 2 }),
             ]
         );
         assert_eq!(ctx.timers, [(1, Duration::from_secs(60))]);

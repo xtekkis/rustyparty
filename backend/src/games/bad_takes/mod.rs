@@ -390,7 +390,7 @@ impl BadTakes {
 
     // How many answers are still waiting in the bag
     fn in_bag(&self) -> usize {
-        self.reading_order.len().saturating_sub(self.pulled)
+        self.reading_order.len() - self.pulled
     }
 
     // Everyone sees the next answer at the same time, while the judge reads it out loud
@@ -707,7 +707,7 @@ pub(crate) fn answer_ids(value: &Value, ids: &mut HashSet<u64>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::games::{GAMES, Recipient, find_game};
+    use crate::games::{GAMES, find_game};
     use rand::SeedableRng;
     use std::collections::HashSet;
 
@@ -803,9 +803,8 @@ mod tests {
 
         // Everyone hears the round start
         assert_eq!(ctx.outgoing.len(), 1);
-        assert_eq!(ctx.outgoing[0].to, Recipient::Everyone);
         assert_eq!(
-            ctx.outgoing[0].message,
+            ctx.outgoing[0],
             json!({
                 "event": "round_started",
                 "round": 1,
@@ -861,7 +860,7 @@ mod tests {
         let ctx = submit(&mut game, 2, &[card.id]).unwrap();
 
         assert_eq!(
-            ctx.outgoing[0].message,
+            ctx.outgoing[0],
             json!({ "event": "submitted", "player": 2 })
         );
         let kim_sees = game.view_for(3);
@@ -976,7 +975,7 @@ mod tests {
         let ctx = submit(&mut game, 3, &[card]).unwrap();
         assert_eq!(game.phase, Phase::Reading);
         assert_eq!(
-            ctx.outgoing.last().map(|outgoing| &outgoing.message),
+            ctx.outgoing.last(),
             Some(&json!({ "event": "reading_started", "answers": 2 }))
         );
         assert_eq!(
@@ -998,9 +997,8 @@ mod tests {
         let first = game.submissions[&game.reading_order[0]].clone();
         let ctx = pull(&mut game, 1).unwrap();
         assert_eq!(ctx.outgoing.len(), 1);
-        assert_eq!(ctx.outgoing[0].to, Recipient::Everyone);
         assert_eq!(
-            ctx.outgoing[0].message,
+            ctx.outgoing[0],
             json!({ "event": "answer_pulled", "cards": first })
         );
         for player in [1, 2, 3, 4] {
@@ -1023,7 +1021,7 @@ mod tests {
         assert_eq!(game.phase, Phase::Reading);
         assert_eq!(ctx.outgoing.len(), 1);
         assert_eq!(
-            ctx.outgoing[0].message,
+            ctx.outgoing[0],
             json!({ "event": "answer_pulled", "cards": last })
         );
         assert_eq!(ctx.timers, [(game.pull_timer_id(), PULL_DURATION)]);
@@ -1031,9 +1029,8 @@ mod tests {
 
         let ctx = show_all(&mut game, 1).unwrap();
         assert_eq!(game.phase, Phase::Judging);
-        assert_eq!(ctx.outgoing[0].to, Recipient::Everyone);
         assert_eq!(
-            ctx.outgoing[0].message,
+            ctx.outgoing[0],
             json!({ "event": "judging_started", "judge_for": 45 })
         );
         assert_eq!(ctx.timers, [(game.timer_id(Timer::Judge), JUDGE_DURATION)]);
@@ -1118,7 +1115,7 @@ mod tests {
             let mut ctx = GameCtx::default();
             game.handle_timer(game.pull_timer_id(), &mut ctx);
             assert_eq!(
-                ctx.outgoing[0].message,
+                ctx.outgoing[0],
                 json!({ "event": "answer_pulled", "cards": answer })
             );
             assert_eq!(ctx.timers, [(game.pull_timer_id(), IDLE_PULL_DURATION)]);
@@ -1131,7 +1128,7 @@ mod tests {
         game.handle_timer(game.pull_timer_id(), &mut ctx);
         assert_eq!(game.phase, Phase::Judging);
         assert_eq!(
-            ctx.outgoing[0].message,
+            ctx.outgoing[0],
             json!({ "event": "judging_started", "judge_for": 20 })
         );
         assert_eq!(
@@ -1182,7 +1179,7 @@ mod tests {
         game.handle_timer(game.pull_timer_id(), &mut GameCtx::default());
         let mut ctx = GameCtx::default();
         game.handle_timer(game.pull_timer_id(), &mut ctx);
-        assert_eq!(ctx.outgoing[0].message["judge_for"], 45);
+        assert_eq!(ctx.outgoing[0]["judge_for"], 45);
         assert_eq!(ctx.timers, [(game.timer_id(Timer::Judge), JUDGE_DURATION)]);
     }
 
@@ -1195,7 +1192,7 @@ mod tests {
         }
 
         let ctx = show_all(&mut game, 1).unwrap();
-        assert_eq!(ctx.outgoing[0].message["judge_for"], 45);
+        assert_eq!(ctx.outgoing[0]["judge_for"], 45);
     }
 
     #[test]
@@ -1446,9 +1443,8 @@ mod tests {
         let ctx = pick(&mut game, 1, kims_cards[0].id).unwrap();
 
         assert_eq!(ctx.outgoing.len(), 1);
-        assert_eq!(ctx.outgoing[0].to, Recipient::Everyone);
         assert_eq!(
-            ctx.outgoing[0].message,
+            ctx.outgoing[0],
             json!({
                 "event": "winner_revealed",
                 "winner": 3,
@@ -1473,7 +1469,7 @@ mod tests {
         let sams_card = game.submissions[&2][0].id;
         let ctx = pick(&mut game, 1, sams_card).unwrap();
         assert_eq!(game.scores[&2], 5);
-        assert_eq!(ctx.outgoing[0].message["points"], 5);
+        assert_eq!(ctx.outgoing[0]["points"], 5);
     }
 
     #[test]
@@ -1484,7 +1480,7 @@ mod tests {
 
         let sams_card = game.submissions[&2][0].id;
         let ctx = pick(&mut game, 1, sams_card).unwrap();
-        assert_eq!(ctx.outgoing[0].message["last_round"], true);
+        assert_eq!(ctx.outgoing[0]["last_round"], true);
         assert!(!game.is_finished(), "everyone sees the winning card first");
 
         let mut ctx = GameCtx::default();
@@ -1493,7 +1489,7 @@ mod tests {
         assert_eq!(game.view_for(3)["phase"], "game_over");
         assert_eq!(game.round, 1, "no next round");
         assert_eq!(
-            ctx.outgoing[0].message,
+            ctx.outgoing[0],
             json!({
                 "event": "game_over",
                 "reason": "points_to_win",
@@ -1543,8 +1539,8 @@ mod tests {
         let mut ctx = GameCtx::default();
         game.player_left(3, &mut ctx);
         assert!(game.is_finished());
-        assert_eq!(ctx.outgoing[0].message["winner"], json!(null));
-        assert_eq!(ctx.outgoing[0].message["cards"], json!(null));
+        assert_eq!(ctx.outgoing[0]["winner"], json!(null));
+        assert_eq!(ctx.outgoing[0]["cards"], json!(null));
         assert_eq!(game.view_for(1)["winner"], json!(null));
         assert_eq!(game.view_for(1)["winning_cards"], json!(null));
     }
@@ -1557,7 +1553,7 @@ mod tests {
 
         let sams_card = game.submissions[&2][0].id;
         let ctx = pick(&mut game, 1, sams_card).unwrap();
-        assert_eq!(ctx.outgoing[0].message["last_round"], false);
+        assert_eq!(ctx.outgoing[0]["last_round"], false);
 
         game.handle_timer(game.timer_id(Timer::Reveal), &mut GameCtx::default());
         assert!(!game.is_finished());
@@ -1586,7 +1582,7 @@ mod tests {
         game.player_left(3, &mut ctx);
         assert!(game.is_finished());
         assert_eq!(
-            ctx.outgoing[0].message,
+            ctx.outgoing[0],
             json!({
                 "event": "game_over",
                 "reason": "not_enough_players",
@@ -1656,8 +1652,8 @@ mod tests {
         assert_eq!(game.phase, Phase::Submitting);
         assert_eq!(game.winner, None);
         assert_eq!(game.prompts.len(), 45 - 2);
-        assert_eq!(ctx.outgoing[0].message["event"], "round_started");
-        assert_eq!(ctx.outgoing[0].message["round"], 2);
+        assert_eq!(ctx.outgoing[0]["event"], "round_started");
+        assert_eq!(ctx.outgoing[0]["round"], 2);
     }
 
     #[test]
@@ -1701,7 +1697,7 @@ mod tests {
 
         let mut ctx = GameCtx::default();
         game.handle_timer(game.timer_id(Timer::Reveal), &mut ctx);
-        assert_eq!(ctx.outgoing[0].message["judge"], 2);
+        assert_eq!(ctx.outgoing[0]["judge"], 2);
         assert_eq!(game.view_for(3)["judge"], 2);
     }
 
@@ -1796,7 +1792,7 @@ mod tests {
         assert_eq!(game.phase, Phase::Reading);
         assert_eq!(game.reading_order, [2], "Kim and Lee sit this round out");
         assert_eq!(
-            ctx.outgoing[0].message,
+            ctx.outgoing[0],
             json!({ "event": "reading_started", "answers": 1 })
         );
     }
@@ -1851,7 +1847,7 @@ mod tests {
         assert!([2, 3, 4].contains(&winner));
         assert_eq!(game.scores[&winner], 1);
         assert_eq!(game.phase, Phase::RoundOver);
-        assert_eq!(ctx.outgoing[0].message["judge_timed_out"], true);
+        assert_eq!(ctx.outgoing[0]["judge_timed_out"], true);
         assert_eq!(
             ctx.timers,
             [(game.timer_id(Timer::Reveal), REVEAL_DURATION)]
@@ -1882,8 +1878,8 @@ mod tests {
 
         let mut ctx = GameCtx::default();
         game.handle_timer(game.timer_id(Timer::Submit), &mut ctx);
-        assert_eq!(ctx.outgoing[0].message, json!({ "event": "round_skipped" }));
-        assert_eq!(ctx.outgoing[1].message["event"], "round_started");
+        assert_eq!(ctx.outgoing[0], json!({ "event": "round_skipped" }));
+        assert_eq!(ctx.outgoing[1]["event"], "round_started");
         assert_eq!(game.round, 2);
         assert_eq!(game.judge, Some(2), "the next judge takes over");
         assert_eq!(game.scores.values().sum::<u8>(), 0, "no point");
@@ -1900,7 +1896,7 @@ mod tests {
 
         let mut ctx = GameCtx::default();
         game.player_left(2, &mut ctx);
-        assert_eq!(ctx.outgoing[0].message, json!({ "event": "round_skipped" }));
+        assert_eq!(ctx.outgoing[0], json!({ "event": "round_skipped" }));
         assert_eq!(game.round, 2);
         assert_eq!(game.phase, Phase::Submitting);
     }
@@ -1913,10 +1909,7 @@ mod tests {
 
         let mut ctx = GameCtx::default();
         game.player_left(1, &mut ctx);
-        assert_eq!(
-            ctx.outgoing[0].message,
-            json!({ "event": "round_cancelled" })
-        );
+        assert_eq!(ctx.outgoing[0], json!({ "event": "round_cancelled" }));
         assert_eq!(game.round, 2);
         assert_eq!(game.judge, Some(2));
         assert!(game.hands[&2].contains(&sams_card), "Sam has his card back");
@@ -1946,10 +1939,7 @@ mod tests {
 
         let mut ctx = GameCtx::default();
         game.player_left(1, &mut ctx);
-        assert_eq!(
-            ctx.outgoing[0].message,
-            json!({ "event": "round_cancelled" })
-        );
+        assert_eq!(ctx.outgoing[0], json!({ "event": "round_cancelled" }));
         assert_eq!(game.phase, Phase::Submitting);
         assert_eq!(game.pulled, 0);
         assert!(game.submissions.is_empty());
@@ -1973,7 +1963,7 @@ mod tests {
 
         let ctx = pull(&mut game, 1).unwrap();
         assert_eq!(
-            ctx.outgoing[0].message,
+            ctx.outgoing[0],
             json!({ "event": "answer_pulled", "cards": next })
         );
     }
@@ -2040,7 +2030,7 @@ mod tests {
 
         let mut ctx = GameCtx::default();
         game.player_left(2, &mut ctx);
-        assert_eq!(ctx.outgoing[0].message, json!({ "event": "round_skipped" }));
+        assert_eq!(ctx.outgoing[0], json!({ "event": "round_skipped" }));
         assert_eq!(game.round, 2);
         assert_eq!(game.pulled, 0);
     }
@@ -2193,10 +2183,8 @@ mod tests {
         for &reader in &everyone {
             let mut seen = HashSet::new();
             answer_ids(&game.view_for(reader), &mut seen);
-            for outgoing in &ctx.outgoing {
-                if outgoing.to == Recipient::Everyone || outgoing.to == Recipient::Player(reader) {
-                    answer_ids(&outgoing.message, &mut seen);
-                }
+            for message in &ctx.outgoing {
+                answer_ids(message, &mut seen);
             }
             for (&owner, hand) in &game.hands {
                 for card in hand {

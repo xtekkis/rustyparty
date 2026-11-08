@@ -70,7 +70,6 @@ impl Game for DummyGame {
         };
 
         *presses += 1;
-        ctx.send_to(player, json!({ "presses": *presses }));
         if *presses == PRESSES_TO_WIN {
             self.finished = true;
             ctx.broadcast(json!({ "event": "won", "winner": player }));
@@ -114,7 +113,6 @@ impl Game for DummyGame {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::games::{Outgoing, Recipient};
 
     fn started_game() -> DummyGame {
         let mut game = DummyGame::default();
@@ -132,29 +130,8 @@ mod tests {
         let mut ctx = GameCtx::default();
         game.start(&[1, 2, 3], &mut ctx);
 
-        assert_eq!(
-            ctx.outgoing,
-            [Outgoing {
-                to: Recipient::Everyone,
-                message: json!({ "event": "started" }),
-            }]
-        );
+        assert_eq!(ctx.outgoing, [json!({ "event": "started" })]);
         assert_eq!(ctx.timers, [(TIME_LIMIT_TIMER, TIME_LIMIT)]);
-    }
-
-    #[test]
-    fn a_press_is_only_told_to_that_player() {
-        let mut game = started_game();
-        let mut ctx = GameCtx::default();
-        press(&mut game, 2, &mut ctx).unwrap();
-
-        assert_eq!(
-            ctx.outgoing,
-            [Outgoing {
-                to: Recipient::Player(2),
-                message: json!({ "presses": 1 }),
-            }]
-        );
     }
 
     #[test]
@@ -168,7 +145,7 @@ mod tests {
 
         assert!(game.is_finished());
         assert_eq!(
-            ctx.outgoing.last().map(|outgoing| &outgoing.message),
+            ctx.outgoing.last(),
             Some(&json!({ "event": "won", "winner": 1 }))
         );
         assert_eq!(press(&mut game, 2, &mut ctx).unwrap_err().code, "game_over");
@@ -195,7 +172,7 @@ mod tests {
         game.handle_timer(TIME_LIMIT_TIMER, &mut ctx);
 
         assert!(game.is_finished());
-        assert_eq!(ctx.outgoing[0].message, json!({ "event": "time_up" }));
+        assert_eq!(ctx.outgoing[0], json!({ "event": "time_up" }));
     }
 
     #[test]
@@ -219,12 +196,11 @@ mod tests {
         game.player_left(3, &mut ctx);
 
         assert!(game.is_finished());
-        let messages: Vec<&Value> = ctx.outgoing.iter().map(|out| &out.message).collect();
         assert_eq!(
-            messages,
+            ctx.outgoing,
             [
-                &json!({ "event": "left", "player": 3 }),
-                &json!({ "event": "not_enough_players" }),
+                json!({ "event": "left", "player": 3 }),
+                json!({ "event": "not_enough_players" }),
             ]
         );
     }

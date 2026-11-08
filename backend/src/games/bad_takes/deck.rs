@@ -51,6 +51,8 @@ impl<T> Deck<T> {
         self.cards.pop()
     }
 
+    // Only tests count the cards
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.cards.len()
     }
