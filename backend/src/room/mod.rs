@@ -1,6 +1,14 @@
+// The room's task: it takes one command at a time and passes it on
 pub mod actor;
+// Four-letter room codes
 pub mod code;
+// Starting the chosen game, passing it actions and timers, then the results
+mod in_game;
+// Joining, ready, settings, kick, ban and leaving
+mod lobby;
+// One player, and the token that gets them back in
 pub mod player;
+// The game vote
 pub mod vote;
 
 use std::collections::{BTreeMap, HashMap, HashSet};

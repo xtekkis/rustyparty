@@ -1,6 +1,20 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use rand::{Rng, RngExt};
+use tokio::sync::mpsc::WeakSender;
+use tokio::time::Instant;
+
+use super::actor::{RoomCommand, remind};
+use super::{Room, RoomState};
+use crate::games::find_game;
+use crate::protocol::ServerMessage;
+
+// The game vote needs at least this many players
+const MIN_PLAYERS_TO_VOTE: usize = 3;
+
+// How long players have to vote
+pub(super) const VOTE_DURATION: Duration = Duration::from_secs(30);
 
 // The game that won the vote
 #[derive(Debug, PartialEq)]
@@ -31,6 +45,97 @@ pub fn pick_winner(votes: &HashMap<u32, &'static str>, rng: &mut impl Rng) -> Op
         game,
         tie_break: leaders.len() > 1,
     })
+}
+
+impl Room {
+    pub(super) fn vote(&mut self, player_id: u32, game_id: &str) {
+        if !matches!(self.state, RoomState::Voting { .. }) {
+            self.send_error(player_id, "not_voting", "Voting isn't open");
+            return;
+        }
+        let Some(game) = find_game(self.games, game_id) else {
+            self.send_error(player_id, "unknown_game", "That game doesn't exist");
+            return;
+        };
+        if !game.fits(self.players.len()) {
+            self.send_error(
+                player_id,
+                "game_not_available",
+                "That game doesn't fit the number of players",
+            );
+            return;
+        }
+
+        if let RoomState::Voting { votes, .. } = &mut self.state {
+            votes.insert(player_id, game.id);
+        }
+        self.broadcast(&self.vote_message());
+    }
+
+    // Everyone connected is ready and there are enough of them: start the game vote
+    pub(super) fn start_vote_if_ready(&mut self, me: &WeakSender<RoomCommand>) {
+        if !matches!(self.state, RoomState::Lobby) {
+            return;
+        }
+        // Players in their grace period don't hold up the others
+        let connected: Vec<_> = self
+            .players
+            .iter()
+            .filter(|player| player.disconnected_since.is_none())
+            .collect();
+        if connected.len() < MIN_PLAYERS_TO_VOTE || !connected.iter().all(|player| player.ready) {
+            return;
+        }
+
+        self.votes_started += 1;
+        let number = self.votes_started;
+        self.state = RoomState::Voting {
+            votes: HashMap::new(),
+            number,
+            ends_at: Instant::now() + VOTE_DURATION,
+        };
+        tracing::info!("Voting started in room {}", self.code);
+        self.broadcast(&self.vote_message());
+        remind(me, VOTE_DURATION, RoomCommand::VoteTimeout { number });
+    }
+
+    // No need to wait out the timer once every connected player has picked a game
+    pub(super) fn end_vote_if_everyone_voted(&mut self, me: &WeakSender<RoomCommand>) {
+        let RoomState::Voting { votes, .. } = &self.state else {
+            return;
+        };
+        let everyone_voted = self
+            .players
+            .iter()
+            .filter(|player| player.disconnected_since.is_none())
+            .all(|player| votes.contains_key(&player.id));
+        if everyone_voted {
+            self.end_vote(me);
+        }
+    }
+
+    // Announce the winner and start it, or go back to the lobby if nobody voted
+    pub(super) fn end_vote(&mut self, me: &WeakSender<RoomCommand>) {
+        let RoomState::Voting { votes, .. } = std::mem::replace(&mut self.state, RoomState::Lobby)
+        else {
+            return;
+        };
+
+        let Some(winner) = pick_winner(&votes, &mut rand::rng()) else {
+            tracing::info!("Nobody voted in room {}", self.code);
+            self.return_to_lobby();
+            return;
+        };
+
+        tracing::info!("{} won the vote in room {}", winner.game, self.code);
+        self.broadcast(&ServerMessage::VoteResult {
+            game: winner.game.to_string(),
+            tie_break: winner.tie_break,
+        });
+        if let Some(info) = find_game(self.games, winner.game) {
+            self.start_game(info, me);
+        }
+    }
 }
 
 #[cfg(test)]

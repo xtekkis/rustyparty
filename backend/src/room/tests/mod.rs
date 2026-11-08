@@ -1,5 +1,7 @@
 // Room tests, one file per part of a room's life. The helpers they share are here
 use super::actor::*;
+use super::in_game::RESULTS_DURATION;
+use super::vote::VOTE_DURATION;
 use super::*;
 use crate::games::bad_takes::{
     BadTakes, IDLE_JUDGE_DURATION, IDLE_PULL_DURATION, PULL_DURATION, REVEAL_DURATION, answer_ids,
