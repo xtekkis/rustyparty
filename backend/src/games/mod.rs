@@ -1,4 +1,13 @@
+// Every game lives in its own folder, like games/bad_takes, and is built from three things here:
+// - GameInfo: what the vote screen shows, and how many players the game takes
+// - Game: the rules. The room calls it when something happens, and it answers by writing
+//   messages and timers into a GameCtx. It never touches the network, real time or the database
+// - view_for: the only way something private, like a hand of cards, reaches one player
+//
+// To add a game: make its folder, implement Game, add its info() to GAMES below, and test it
+// on its own the way games/dummy.rs is tested. Nothing in room/ needs to change.
 pub mod bad_takes;
+// The smallest complete game, used to test the room
 #[cfg(test)]
 pub mod dummy;
 

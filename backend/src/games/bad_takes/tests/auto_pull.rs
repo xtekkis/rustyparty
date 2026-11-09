@@ -24,10 +24,7 @@ fn answers_come_out_by_themselves_when_the_judge_stops_tapping() {
     let mut ctx = GameCtx::default();
     game.handle_timer(game.pull_timer_id(), &mut ctx);
     assert_eq!(game.phase, Phase::Judging);
-    assert_eq!(
-        ctx.outgoing[0],
-        json!({ "event": "judging_started", "judge_for": 20 })
-    );
+    assert_eq!(ctx.outgoing[0], json!({ "event": "judging_started" }));
     assert_eq!(
         ctx.timers,
         [(game.timer_id(Timer::Judge), IDLE_JUDGE_DURATION)]
@@ -76,7 +73,6 @@ fn a_judge_who_tapped_once_keeps_the_full_time_to_pick() {
     game.handle_timer(game.pull_timer_id(), &mut GameCtx::default());
     let mut ctx = GameCtx::default();
     game.handle_timer(game.pull_timer_id(), &mut ctx);
-    assert_eq!(ctx.outgoing[0]["judge_for"], 45);
     assert_eq!(ctx.timers, [(game.timer_id(Timer::Judge), JUDGE_DURATION)]);
 }
 
@@ -89,7 +85,7 @@ fn showing_the_answers_counts_as_a_tap() {
     }
 
     let ctx = show_all(&mut game, 1).unwrap();
-    assert_eq!(ctx.outgoing[0]["judge_for"], 45);
+    assert_eq!(ctx.timers, [(game.timer_id(Timer::Judge), JUDGE_DURATION)]);
 }
 
 #[test]

@@ -66,10 +66,7 @@ fn the_pick_timer_starts_when_the_judge_shows_all_the_answers() {
 
     let ctx = show_all(&mut game, 1).unwrap();
     assert_eq!(game.phase, Phase::Judging);
-    assert_eq!(
-        ctx.outgoing[0],
-        json!({ "event": "judging_started", "judge_for": 45 })
-    );
+    assert_eq!(ctx.outgoing[0], json!({ "event": "judging_started" }));
     assert_eq!(ctx.timers, [(game.timer_id(Timer::Judge), JUDGE_DURATION)]);
     assert_eq!(game.view_for(2)["phase"], "judging");
 }

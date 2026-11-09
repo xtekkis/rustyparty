@@ -44,7 +44,6 @@ impl BadTakes {
             "round": self.round,
             "judge": self.judge,
             "prompt": self.prompt,
-            "submit_for": SUBMIT_DURATION.as_secs(),
         }));
         ctx.start_timer(self.timer_id(Timer::Submit), SUBMIT_DURATION);
     }

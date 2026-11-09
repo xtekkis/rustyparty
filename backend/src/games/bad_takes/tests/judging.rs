@@ -39,7 +39,6 @@ fn the_winner_gets_a_point_and_everyone_is_told() {
             "winner": 3,
             "cards": kims_cards,
             "points": 1,
-            "reveal_for": 4,
             "last_round": false,
             "judge_timed_out": false,
         })

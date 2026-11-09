@@ -143,8 +143,8 @@ async fn handle_text(
                     target_id,
                     ban: true,
                 },
-                // Other messages are handled in later steps
-                _ => return None,
+                // Handled above
+                ClientMessage::Join { .. } | ClientMessage::Leave => return None,
             };
             room.send(command).await;
             None

@@ -20,7 +20,7 @@ pub struct Player {
     pub sender: UnboundedSender<ServerMessage>,
 }
 
-// Avatar ids, matching the image names in frontend/public/avatars
+// Avatar ids. The frontend draws each one
 pub const AVATARS: &[&str] = &["fox", "cat", "owl", "bear", "frog"];
 
 // No avatar is fine, it means initials

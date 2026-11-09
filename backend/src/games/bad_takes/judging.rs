@@ -16,10 +16,7 @@ impl BadTakes {
         } else {
             IDLE_JUDGE_DURATION
         };
-        ctx.broadcast(json!({
-            "event": "judging_started",
-            "judge_for": judge_for.as_secs(),
-        }));
+        ctx.broadcast(json!({ "event": "judging_started" }));
         ctx.start_timer(self.timer_id(Timer::Judge), judge_for);
     }
 
@@ -78,7 +75,6 @@ impl BadTakes {
             "winner": winner,
             "cards": self.winning_cards(),
             "points": points,
-            "reveal_for": REVEAL_DURATION.as_secs(),
             "last_round": self.game_winner().is_some(),
             "judge_timed_out": judge_timed_out,
         }));

@@ -43,7 +43,6 @@ fn first_player_judges_the_first_round() {
             "round": 1,
             "judge": 4,
             "prompt": prompt,
-            "submit_for": 60,
         })
     );
     assert_eq!(
