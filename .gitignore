@@ -4,8 +4,13 @@ PLAN.md
 # Rust build output
 target/
 
-# Environment files
+# Frontend packages and build output
+frontend/node_modules/
+frontend/dist/
+
+# Environment files, and Vite's local ones like .env.local
 .env
+*.local
 
 # Claude Code
 .claude/
