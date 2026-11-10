@@ -66,6 +66,16 @@ pub struct RoomSettings {
     pub points_to_win: u8,
 }
 
+// Which part of its cycle a room is in
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoomPhase {
+    Lobby,
+    Voting,
+    InGame,
+    Results,
+}
+
 // Messages from the server to a player's phone
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -78,6 +88,8 @@ pub enum ServerMessage {
         players: Vec<LobbyPlayer>,
         host: Option<u32>,
         settings: RoomSettings,
+        // Sent again every time it changes, so the latest lobby message says where the room is
+        phase: RoomPhase,
     },
     VoteState {
         options: Vec<VoteOption>,

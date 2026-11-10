@@ -40,11 +40,21 @@ export interface RoomSettings {
   points_to_win: number
 }
 
+// Which part of its cycle a room is in
+export type RoomPhase = 'lobby' | 'voting' | 'in_game' | 'results'
+
 // Messages from the server to the phone. A game's view and events are its own,
 // so they're unknown here and each game reads them with its own types
 export type ServerMessage =
   | { type: 'welcome'; player_id: number; token: string }
-  | { type: 'lobby'; players: LobbyPlayer[]; host: number | null; settings: RoomSettings }
+  // Sent again every time phase changes, so the latest lobby message says where the room is
+  | {
+      type: 'lobby'
+      players: LobbyPlayer[]
+      host: number | null
+      settings: RoomSettings
+      phase: RoomPhase
+    }
   // votes: game id to the ids of the players who voted for it
   | { type: 'vote_state'; options: VoteOption[]; votes: Record<string, number[]>; ends_in: number }
   | { type: 'vote_result'; game: string; tie_break: boolean }

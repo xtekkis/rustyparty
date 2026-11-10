@@ -85,6 +85,33 @@ async fn old_vote_time_limit_is_ignored() {
     assert!(matches!(room.state, RoomState::Voting { .. }));
 }
 
+#[tokio::test]
+async fn starting_the_vote_says_the_room_is_voting() {
+    let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
+    let (_commands, me) = test_me();
+    for player_id in 1..=3 {
+        room.set_ready(player_id, true);
+    }
+    assert_eq!(last_phase(&mut phones[0]), Some(RoomPhase::Lobby));
+
+    room.start_vote_if_ready(&me);
+    assert_eq!(last_phase(&mut phones[0]), Some(RoomPhase::Voting));
+}
+
+#[tokio::test]
+async fn a_vote_nobody_answers_says_the_room_is_back_in_the_lobby() {
+    let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
+    let (_commands, me) = test_me();
+    for player_id in 1..=3 {
+        room.set_ready(player_id, true);
+    }
+    room.start_vote_if_ready(&me);
+    drain(&mut phones[0]);
+
+    room.handle(RoomCommand::VoteTimeout { number: 1 }, &me);
+    assert_eq!(last_phase(&mut phones[0]), Some(RoomPhase::Lobby));
+}
+
 #[tokio::test(start_paused = true)]
 async fn unanswered_vote_returns_the_room_to_the_lobby() {
     let (room, _rooms) = spawn_room();

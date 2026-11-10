@@ -67,6 +67,65 @@ async fn after_a_game_nobody_is_ready_and_no_vote_starts() {
     assert!(players.iter().all(|player| !player.ready));
 }
 
+#[tokio::test(start_paused = true)]
+async fn the_phase_follows_the_game_to_the_results_and_back() {
+    let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
+    let (commands, mut reminders) = mpsc::channel(8);
+    let me = commands.downgrade();
+
+    room.start_game(&DUMMY_INFO, &me);
+    assert_eq!(last_phase(&mut phones[0]), Some(RoomPhase::InGame));
+
+    for _ in 0..3 {
+        room.game_action(1, json!({ "kind": "press" }), &me);
+    }
+    room.finish_game_if_over(&me);
+    assert_eq!(last_phase(&mut phones[0]), Some(RoomPhase::Results));
+
+    tokio::time::sleep(RESULTS_DURATION + Duration::from_secs(1)).await;
+    while let Ok(reminder) = reminders.try_recv() {
+        room.handle(reminder, &me);
+    }
+    assert_eq!(last_phase(&mut phones[0]), Some(RoomPhase::Lobby));
+}
+
+#[tokio::test]
+async fn the_lobby_arrives_before_the_games_first_view() {
+    let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
+    let (_commands, me) = test_me();
+    room.start_game(&DUMMY_INFO, &me);
+
+    let first = drain(&mut phones[0]).into_iter().find(|message| {
+        matches!(
+            message,
+            ServerMessage::Lobby { .. } | ServerMessage::GameView { .. }
+        )
+    });
+    assert!(matches!(
+        first,
+        Some(ServerMessage::Lobby {
+            phase: RoomPhase::InGame,
+            ..
+        })
+    ));
+}
+
+#[tokio::test]
+async fn a_phone_coming_back_during_the_results_hears_the_phase() {
+    let (mut room, _phones) = room_with(&["Alex", "Sam", "Kim"]);
+    let (_commands, me) = test_me();
+    room.start_game(&DUMMY_INFO, &me);
+    for _ in 0..3 {
+        room.game_action(1, json!({ "kind": "press" }), &me);
+    }
+    room.finish_game_if_over(&me);
+
+    let token = room.players[1].token.clone();
+    let (connection, mut new_phone) = mpsc::unbounded_channel();
+    room.join("Sam".to_string(), None, Some(token), connection, &me);
+    assert_eq!(last_phase(&mut new_phone), Some(RoomPhase::Results));
+}
+
 #[tokio::test]
 async fn unfinished_game_keeps_going() {
     let (mut room, _phones) = room_with(&["Alex", "Sam", "Kim"]);

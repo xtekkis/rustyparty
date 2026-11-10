@@ -9,13 +9,24 @@ use crate::games::bad_takes::{
 };
 use crate::games::dummy::{DUMMY_INFO, DummyGame};
 use crate::games::{Game, GameCtx, GameInfo};
-use crate::protocol::RoomSettings;
+use crate::protocol::{RoomPhase, RoomSettings};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashSet};
 use tokio::sync::mpsc::{self, UnboundedReceiver, WeakSender};
 use tokio::sync::oneshot;
+
+// The phase in the last lobby message this phone got
+fn last_phase(messages: &mut UnboundedReceiver<ServerMessage>) -> Option<RoomPhase> {
+    drain(messages)
+        .into_iter()
+        .rev()
+        .find_map(|message| match message {
+            ServerMessage::Lobby { phase, .. } => Some(phase),
+            _ => None,
+        })
+}
 
 mod bad_takes;
 mod countdown;

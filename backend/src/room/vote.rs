@@ -95,7 +95,8 @@ impl Room {
             ends_at: Instant::now() + VOTE_DURATION,
         };
         tracing::info!("Voting started in room {}", self.code);
-        self.broadcast(&self.vote_message());
+        // The new phase, then the vote itself
+        self.broadcast_players();
         remind(me, VOTE_DURATION, RoomCommand::VoteTimeout { number });
     }
 

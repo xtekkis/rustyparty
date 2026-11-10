@@ -29,6 +29,8 @@ impl Room {
             ends_at: None,
         };
         tracing::info!("Game {} started in room {}", info.id, self.code);
+        // Phones switch to the game before its first view arrives
+        self.broadcast(&self.lobby_message());
         self.run_game_ctx(ctx, number, me);
     }
 
@@ -132,6 +134,7 @@ impl Room {
         let number = *number;
         self.state = RoomState::Results { number };
         tracing::info!("Game {number} finished in room {}", self.code);
+        self.broadcast(&self.lobby_message());
         self.broadcast(&ServerMessage::Results {
             ends_in: RESULTS_DURATION.as_secs(),
         });

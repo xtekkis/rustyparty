@@ -18,7 +18,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::time::Instant;
 
 use crate::games::{GAMES, Game, GameInfo};
-use crate::protocol::{LobbyPlayer, RoomSettings, ServerMessage, VoteOption};
+use crate::protocol::{LobbyPlayer, RoomPhase, RoomSettings, ServerMessage, VoteOption};
 use player::{Player, generate_token};
 
 const NICKNAME_MAX_LENGTH: usize = 16;
@@ -299,10 +299,17 @@ impl Room {
                     .map(|since| seconds_until(since + DISCONNECT_GRACE)),
             })
             .collect();
+        let phase = match self.state {
+            RoomState::Lobby => RoomPhase::Lobby,
+            RoomState::Voting { .. } => RoomPhase::Voting,
+            RoomState::InGame { .. } => RoomPhase::InGame,
+            RoomState::Results { .. } => RoomPhase::Results,
+        };
         ServerMessage::Lobby {
             players,
             host: self.host,
             settings: self.settings,
+            phase,
         }
     }
 
