@@ -1,0 +1,13 @@
+.buttons{display:grid;gap:14px}
+.joinTitle{margin:0;font:400 25px/1.05 var(--world-display);text-wrap:balance}
+.joinHead{display:flex;justify-content:space-between;align-items:center;gap:var(--space-2)}
+.small{zoom:.62;flex:none}
+.backRow{display:grid;grid-template-columns:64px 1fr;gap:var(--space-2)}
+.lobbyHead{display:flex;justify-content:space-between;align-items:center;gap:var(--space-2)}
+.games{display:grid;gap:14px}
+.bigLine{display:block;font:400 25px/1.2 var(--world-display);padding:var(--space-2) 0}
+.resultTitle{margin:0 0 var(--space-2);font:400 34px/1.1 var(--world-display);text-align:center;text-wrap:balance}
+@container (min-aspect-ratio:3/2) and (max-height:520px){
+  .games{overflow-y:auto;min-height:0;gap:10px;padding:0 5px 5px 0}
+  .joinHead .small{display:none}
+}

@@ -1,0 +1,104 @@
+/* rustyparty — generated from tokens.json */
+@font-face{font-family:"Yeseva One";font-weight:400;font-display:swap;src:url("fonts/yeseva-one-400.woff2") format("woff2")}
+@font-face{font-family:"Bitter";font-weight:500;font-display:swap;src:url("fonts/bitter-500.woff2") format("woff2")}
+@font-face{font-family:"Bitter";font-weight:700;font-display:swap;src:url("fonts/bitter-700.woff2") format("woff2")}
+@font-face{font-family:"Dela Gothic One";font-weight:400;font-display:swap;src:url("fonts/dela-gothic-one-400.woff2") format("woff2")}
+@font-face{font-family:"Familjen Grotesk";font-weight:500;font-display:swap;src:url("fonts/familjen-grotesk-500.woff2") format("woff2")}
+@font-face{font-family:"Familjen Grotesk";font-weight:700;font-display:swap;src:url("fonts/familjen-grotesk-700.woff2") format("woff2")}
+:root, [data-theme="platform"] {
+  --ground: #11463a;
+  --dots: #1f6653;
+  --ink: #f6f0df;
+  --muted: #d3e2d0;
+  --panel: #0b3329;
+  --divider: #1e5748;
+  --tile: #f6f0df;
+  --tile-ink: #14211c;
+  --accent: #f2b632;
+  --on-accent: #14211c;
+  --accent-text: #f6c95b;
+  --success: #3f9c7c;
+  --on-success: #0a1f19;
+  --success-text: #8fe0bf;
+  --selected: #f2b632;
+  --on-selected: #14211c;
+  --focus: #ffffff;
+  --camera: #06201a;
+  --prompt: #0b3329;
+  --on-prompt: #f6f0df;
+  --fill: #f2b632;
+  --card: var(--tile);
+  --on-card: var(--tile-ink);
+  --bag: #f2b632;
+  --bag-dots: #d9981f;
+  --bag-mouth: #14211c;
+  --bag-shadow: #06201a;
+  --avatar-ground: var(--tile);
+  --avatar-ring: #06201a;
+  --avatar-feature: #14211c;
+  --avatar-fox: #c8562a;
+  --avatar-cat: #7a1f25;
+  --avatar-owl: #256b58;
+  --avatar-bear: #7d5a3a;
+  --avatar-frog: #4f7d2c;
+  --initial-1: #f2b632;
+  --initial-2: #f0926a;
+  --initial-3: #8fd6bd;
+  --initial-4: #a8c7e8;
+  --initial-5: #f2a8b8;
+  --on-initial: #14211c;
+  --shadow-hard: 4px 4px 0 #06201a;
+  --shadow-key: 3px 3px 0 #06201a;
+  --shadow-pressed: 0 0 0 #06201a;
+}
+[data-theme="bad-takes"] {
+  --ground: #581521;
+  --dots: #762635;
+  --ink: #fff3e6;
+  --muted: #f6d6cd;
+  --panel: #3b0c16;
+  --divider: #6f2230;
+  --tile: #fff3e6;
+  --tile-ink: #2a0a10;
+  --accent: #ffb627;
+  --on-accent: #2a0a10;
+  --accent-text: #ffc75a;
+  --success: #3f9c7c;
+  --on-success: #0a1f19;
+  --success-text: #ffd27a;
+  --selected: #ffb627;
+  --on-selected: #2a0a10;
+  --focus: #ffffff;
+  --camera: #1d0509;
+  --prompt: #1d0509;
+  --on-prompt: #fff3e6;
+  --fill: #ffb627;
+  --card: var(--tile);
+  --on-card: var(--tile-ink);
+  --bag: #ffb627;
+  --bag-dots: #e8930f;
+  --bag-mouth: #2a0a10;
+  --bag-shadow: #24060c;
+  --avatar-ground: var(--tile);
+  --avatar-ring: #24060c;
+  --avatar-feature: #2a0a10;
+  --shadow-hard: 4px 4px 0 #24060c;
+  --shadow-key: 3px 3px 0 #24060c;
+  --shadow-pressed: 0 0 0 #24060c;
+}
+:root {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-gutter: 14px;
+  --space-4: 16px;
+  --radius-tile: 2px;
+  --tap-min: 44px;
+  --key: 46px;
+  --top-bar: 52px;
+  --tap-large: 60px;
+  --font-display: "Yeseva One", Georgia, serif;
+  --font-body: Bitter, Georgia, serif;
+  --font-takes-display: "Dela Gothic One", Impact, sans-serif;
+  --font-takes-body: "Familjen Grotesk", system-ui, sans-serif;
+}

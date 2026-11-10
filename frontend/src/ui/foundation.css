@@ -1,0 +1,5 @@
+/* Global rules. tokens.css must load first. Each world (data-theme) picks its own typefaces here. */
+:root,[data-theme="platform"]{--world-display:var(--font-display);--world-body:var(--font-body)}
+[data-theme="bad-takes"]{--world-display:var(--font-takes-display);--world-body:var(--font-takes-body)}
+[data-theme]{font-family:var(--world-body)}
+[data-theme],[data-theme] *,[data-theme] *::before,[data-theme] *::after{box-sizing:border-box}
