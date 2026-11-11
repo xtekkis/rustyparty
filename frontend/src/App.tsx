@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react'
 import { createRoom } from './api'
+import { JoinRoom } from './JoinRoom'
 import { HomeScreen, RoomCode, Screen, StatusBanner, Strip } from './ui'
 
 // How long an error stays on screen
 const ERROR_MS = 4000
 
+type Showing = { screen: 'home' } | { screen: 'join' } | { screen: 'room'; code: string }
+
 // The app's root: picks the screen
 function App() {
-  const [room, setRoom] = useState<string | null>(null)
+  const [showing, setShowing] = useState<Showing>({ screen: 'home' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -22,7 +25,7 @@ function App() {
     if (busy) return
     setBusy(true)
     try {
-      setRoom(await createRoom())
+      setShowing({ screen: 'room', code: await createRoom() })
     } catch (failure) {
       setError((failure as Error).message)
     } finally {
@@ -32,12 +35,16 @@ function App() {
 
   return (
     <>
-      {room ? (
-        // Until the profile screen: shows the room was made
-        <Screen glance={<><RoomCode code={room} /><Strip center>Room created</Strip></>} />
+      {showing.screen === 'home' ? (
+        <HomeScreen onCreate={create} onJoin={() => setShowing({ screen: 'join' })} />
+      ) : showing.screen === 'join' ? (
+        <JoinRoom
+          onFound={(code) => setShowing({ screen: 'room', code })}
+          onBack={() => setShowing({ screen: 'home' })}
+        />
       ) : (
-        // Join room is wired up in the next step
-        <HomeScreen onCreate={create} onJoin={() => {}} />
+        // Until the profile screen: shows which room this phone is going into
+        <Screen glance={<><RoomCode code={showing.code} /><Strip center>Room ready</Strip></>} />
       )}
       {error ? (
         <div data-theme="platform">
