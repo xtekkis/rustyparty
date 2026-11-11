@@ -1,10 +1,9 @@
-import { useServer } from './useServer'
+import { HomeScreen } from './ui'
 
-// The app's root. Every screen comes from the design kit, wired up in later steps
+// The app's root: picks the screen. For now there's only home
 function App() {
-  const { status } = useServer()
-  // Until the home screen, a way to see the connection works
-  return <h1>rustyparty: {status}</h1>
+  // Create room and Join room are wired up in the next steps
+  return <HomeScreen onCreate={() => {}} onJoin={() => {}} />
 }
 
 export default App
