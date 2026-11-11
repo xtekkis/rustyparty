@@ -46,10 +46,11 @@ export function JoinRoom({ onFound, onBack }: JoinRoomProps) {
     }
   }
 
+  // Always one letter, so a typo in a wrong code is quick to fix
   function remove() {
     if (checking) return
     setError(undefined)
-    setCode(error ? '' : code.slice(0, -1))
+    setCode(code.slice(0, -1))
   }
 
   useEffect(() => {

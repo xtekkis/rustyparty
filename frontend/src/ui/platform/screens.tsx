@@ -34,7 +34,7 @@ export interface JoinCodeScreenProps {
 export function JoinCodeScreen({ code, error, checking, onLetter, onDelete, onScan, onBack }: JoinCodeScreenProps) {
   return (
     <Screen
-      glance={<><h1 className={styles.joinTitle}>Enter the room code</h1><CodeSlots code={code} />
+      glance={<><h1 className={styles.joinTitle}>Enter the room code</h1>{/* wrong added in rustyparty */}<CodeSlots code={code} wrong={!!error} />
         <Strip tone={error ? 'alert' : 'default'} role={error ? 'alert' : 'status'}>{error ?? (checking ? 'Looking for that room' : 'Ask the host for the 4 letters.')}</Strip></>}
       thumb={<><LetterTray onLetter={onLetter} onDelete={onDelete} disabled={checking} />
         <div className={styles.backRow}><ActionTile icon="back" label="Back" aria-label="Back to home" onClick={onBack} /><Button variant="secondary" icon="scan" onClick={onScan}>Scan QR code</Button></div></>} />
