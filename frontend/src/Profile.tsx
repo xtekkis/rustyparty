@@ -1,6 +1,7 @@
 // Picking a nickname and an avatar, then asking the server to let this phone in
 import { useState } from 'react'
 import { UNREACHABLE } from './api'
+import { savedToken } from './session'
 import type { ServerState } from './serverState'
 import { ProfileScreen, type AvatarKind } from './ui'
 import type { Server } from './useServer'
@@ -31,7 +32,9 @@ export function Profile({ code, server }: ProfileProps) {
     }
     setOffline(false)
     setErrorBefore(server.state.error)
-    server.send({ type: 'join', room: code, nickname: nickname.trim(), avatar, token: null })
+    // With a saved token the server gives back the same seat, and ignores the name and avatar
+    const token = savedToken(code)
+    server.send({ type: 'join', room: code, nickname: nickname.trim(), avatar, token })
   }
 
   function typed(value: string) {

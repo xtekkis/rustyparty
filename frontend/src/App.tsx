@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { createRoom } from './api'
 import { JoinRoom } from './JoinRoom'
 import { Profile } from './Profile'
+import { saveSession } from './session'
 import { HomeScreen, RoomCode, Screen, StatusBanner, Strip } from './ui'
 import { useServer } from './useServer'
 
@@ -37,6 +38,12 @@ function App() {
   }
 
   const { welcome, lobby } = server.state
+  const room = showing.screen === 'profile' ? showing.code : null
+
+  // Remember the seat as soon as the server gives one
+  useEffect(() => {
+    if (welcome && room) saveSession({ room, token: welcome.token })
+  }, [welcome, room])
   const me = lobby?.players.find((player) => player.id === welcome?.player_id)
 
   let screen
