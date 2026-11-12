@@ -9,6 +9,8 @@ export interface ServerState {
   welcome: Of<'welcome'> | null
   // The players, the settings and the room's phase
   lobby: Of<'lobby'> | null
+  // When the lobby message arrived, in ms, so reconnect countdowns can keep ticking
+  lobbyAt: number
   vote: Of<'vote_state'> | null
   voteResult: Of<'vote_result'> | null
   game: Of<'game_view'> | null
@@ -24,6 +26,7 @@ export interface ServerState {
 export const initialState: ServerState = {
   welcome: null,
   lobby: null,
+  lobbyAt: 0,
   vote: null,
   voteResult: null,
   game: null,
@@ -33,12 +36,13 @@ export const initialState: ServerState = {
   removed: null,
 }
 
-export function applyMessage(state: ServerState, message: ServerMessage): ServerState {
+// at: when the message arrived, passed in so this stays a pure function
+export function applyMessage(state: ServerState, message: ServerMessage, at = 0): ServerState {
   switch (message.type) {
     case 'welcome':
       return { ...state, welcome: message }
     case 'lobby':
-      return { ...leftoversCleared(state, message.phase), lobby: message }
+      return { ...leftoversCleared(state, message.phase), lobby: message, lobbyAt: at }
     case 'vote_state':
       return { ...state, vote: message }
     case 'vote_result':

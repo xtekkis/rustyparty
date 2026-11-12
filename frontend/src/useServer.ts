@@ -14,8 +14,17 @@ function serverUrl(): string {
   return `${protocol}//${location.host}/ws`
 }
 
+interface Received {
+  message: ServerMessage
+  at: number
+}
+
 export function useServer() {
-  const [state, dispatch] = useReducer(applyMessage, initialState)
+  const [state, dispatch] = useReducer(
+    (current: typeof initialState, received: Received) =>
+      applyMessage(current, received.message, received.at),
+    initialState,
+  )
   const [status, setStatus] = useState<ConnectionStatus>('connecting')
   const socket = useRef<WebSocket | null>(null)
 
@@ -24,7 +33,8 @@ export function useServer() {
     socket.current = ws
     ws.onopen = () => setStatus('open')
     ws.onclose = () => setStatus('closed')
-    ws.onmessage = (message) => dispatch(JSON.parse(message.data) as ServerMessage)
+    ws.onmessage = (message) =>
+      dispatch({ message: JSON.parse(message.data) as ServerMessage, at: Date.now() })
     return () => {
       // A socket closed here is replaced straight away, so it mustn't report itself closed
       ws.onopen = null

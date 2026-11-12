@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import { createRoom } from './api'
 import { JoinRoom } from './JoinRoom'
+import { Lobby } from './Lobby'
 import { Profile } from './Profile'
 import { saveSession } from './session'
-import { HomeScreen, RoomCode, Screen, StatusBanner, Strip } from './ui'
+import { HomeScreen, StatusBanner } from './ui'
 import { useServer } from './useServer'
 
 // How long an error stays on screen
@@ -37,23 +38,16 @@ function App() {
     }
   }
 
-  const { welcome, lobby } = server.state
+  const { welcome } = server.state
   const room = showing.screen === 'profile' ? showing.code : null
 
   // Remember the seat as soon as the server gives one
   useEffect(() => {
     if (welcome && room) saveSession({ room, token: welcome.token })
   }, [welcome, room])
-  const me = lobby?.players.find((player) => player.id === welcome?.player_id)
-
   let screen
   if (welcome && showing.screen === 'profile') {
-    // Until the lobby screen: shows this phone got in
-    screen = (
-      <Screen
-        glance={<><RoomCode code={showing.code} /><Strip center>You're in as {me?.nickname}</Strip></>}
-      />
-    )
+    screen = <Lobby code={showing.code} server={server} />
   } else if (showing.screen === 'profile') {
     screen = <Profile code={showing.code} server={server} />
   } else if (showing.screen === 'join') {
