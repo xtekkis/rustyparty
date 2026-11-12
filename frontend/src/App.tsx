@@ -1,15 +1,18 @@
 import { useEffect, useState } from 'react'
 import { createRoom } from './api'
 import { JoinRoom } from './JoinRoom'
+import { Profile } from './Profile'
 import { HomeScreen, RoomCode, Screen, StatusBanner, Strip } from './ui'
+import { useServer } from './useServer'
 
 // How long an error stays on screen
 const ERROR_MS = 4000
 
-type Showing = { screen: 'home' } | { screen: 'join' } | { screen: 'room'; code: string }
+type Showing = { screen: 'home' } | { screen: 'join' } | { screen: 'profile'; code: string }
 
 // The app's root: picks the screen
 function App() {
+  const server = useServer()
   const [showing, setShowing] = useState<Showing>({ screen: 'home' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -25,7 +28,7 @@ function App() {
     if (busy) return
     setBusy(true)
     try {
-      setShowing({ screen: 'room', code: await createRoom() })
+      setShowing({ screen: 'profile', code: await createRoom() })
     } catch (failure) {
       setError((failure as Error).message)
     } finally {
@@ -33,19 +36,33 @@ function App() {
     }
   }
 
+  const { welcome, lobby } = server.state
+  const me = lobby?.players.find((player) => player.id === welcome?.player_id)
+
+  let screen
+  if (welcome && showing.screen === 'profile') {
+    // Until the lobby screen: shows this phone got in
+    screen = (
+      <Screen
+        glance={<><RoomCode code={showing.code} /><Strip center>You're in as {me?.nickname}</Strip></>}
+      />
+    )
+  } else if (showing.screen === 'profile') {
+    screen = <Profile code={showing.code} server={server} />
+  } else if (showing.screen === 'join') {
+    screen = (
+      <JoinRoom
+        onFound={(code) => setShowing({ screen: 'profile', code })}
+        onBack={() => setShowing({ screen: 'home' })}
+      />
+    )
+  } else {
+    screen = <HomeScreen onCreate={create} onJoin={() => setShowing({ screen: 'join' })} />
+  }
+
   return (
     <>
-      {showing.screen === 'home' ? (
-        <HomeScreen onCreate={create} onJoin={() => setShowing({ screen: 'join' })} />
-      ) : showing.screen === 'join' ? (
-        <JoinRoom
-          onFound={(code) => setShowing({ screen: 'room', code })}
-          onBack={() => setShowing({ screen: 'home' })}
-        />
-      ) : (
-        // Until the profile screen: shows which room this phone is going into
-        <Screen glance={<><RoomCode code={showing.code} /><Strip center>Room ready</Strip></>} />
-      )}
+      {screen}
       {error ? (
         <div data-theme="platform">
           <StatusBanner tone="alert">{error}</StatusBanner>

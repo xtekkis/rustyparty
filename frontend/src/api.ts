@@ -1,7 +1,7 @@
 // The server's HTTP endpoints. Everything else goes over the WebSocket
 import type { CreateRoomResponse, HttpError } from './protocol'
 
-const UNREACHABLE = "Can't reach the server, check your connection"
+export const UNREACHABLE = "Can't reach the server, check your connection"
 
 // Every call throws an error whose message can be shown as it is
 async function request(url: string, options?: RequestInit): Promise<Response> {

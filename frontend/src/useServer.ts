@@ -5,6 +5,9 @@ import { applyMessage, initialState } from './serverState'
 
 export type ConnectionStatus = 'connecting' | 'open' | 'closed'
 
+// What screens get from the hook
+export type Server = ReturnType<typeof useServer>
+
 // Same address as the page. In development Vite passes /ws on to the backend
 function serverUrl(): string {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
