@@ -26,16 +26,18 @@ export function Lobby({ code, server }: LobbyProps) {
   const secondsGone = Math.max(0, Math.floor((now - lobbyAt) / 1000))
   const players = lobby.players.map((player) => toPlayerView(player, lobby.host, secondsGone))
   const me = lobby.players.find((player) => player.id === welcome.player_id)
+  const ready = me?.ready ?? false
 
   return (
     <LobbyScreen
       code={code}
-      // The QR code, Ready, Copy and the host's settings come in the next steps
+      // The QR code, Copy and the host's settings come in the next steps
       qr={null}
       players={players}
       meId={String(welcome.player_id)}
-      ready={me?.ready ?? false}
-      onToggleReady={() => {}}
+      ready={ready}
+      // The button changes when the server's lobby message says so, not before
+      onToggleReady={() => server.send({ type: 'ready', ready: !ready })}
       onCopy={() => {}}
     />
   )
