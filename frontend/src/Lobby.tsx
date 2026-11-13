@@ -1,4 +1,5 @@
 // The waiting room: the room code and everyone in it
+import { QRCodeSVG } from 'qrcode.react'
 import { useEffect, useState } from 'react'
 import { toPlayerView } from './players'
 import { LobbyScreen } from './ui'
@@ -28,12 +29,14 @@ export function Lobby({ code, server }: LobbyProps) {
   const me = lobby.players.find((player) => player.id === welcome.player_id)
   const ready = me?.ready ?? false
   const isHost = lobby.host === welcome.player_id
+  // Where an invite takes a friend: straight to the profile screen for this room
+  const joinLink = `${location.origin}/join/${code}`
 
   return (
     <LobbyScreen
       code={code}
-      // The QR code and Copy come in the next steps
-      qr={null}
+      // Copy comes in the next step
+      qr={<QRCodeSVG value={joinLink} title={`Join link ${joinLink}`} />}
       players={players}
       meId={String(welcome.player_id)}
       ready={ready}
