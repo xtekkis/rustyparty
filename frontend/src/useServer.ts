@@ -21,12 +21,14 @@ interface Received {
 
 export function useServer() {
   const [state, dispatch] = useReducer(
-    (current: typeof initialState, received: Received) =>
-      applyMessage(current, received.message, received.at),
+    (current: typeof initialState, received: Received | 'forget') =>
+      received === 'forget' ? initialState : applyMessage(current, received.message, received.at),
     initialState,
   )
   const [status, setStatus] = useState<ConnectionStatus>('connecting')
   const socket = useRef<WebSocket | null>(null)
+  // Counts up on each restart, which opens a fresh connection
+  const [connection, setConnection] = useState(0)
 
   useEffect(() => {
     const ws = new WebSocket(serverUrl())
@@ -42,7 +44,7 @@ export function useServer() {
       ws.onmessage = null
       ws.close()
     }
-  }, [])
+  }, [connection])
 
   // Dropped while the connection isn't open
   const send = useCallback((message: ClientMessage) => {
@@ -51,5 +53,12 @@ export function useServer() {
     }
   }, [])
 
-  return { status, state, send }
+  // Start again with nothing from the old room, like after being removed from it
+  const restart = useCallback(() => {
+    dispatch('forget')
+    setStatus('connecting')
+    setConnection((count) => count + 1)
+  }, [])
+
+  return { status, state, send, restart }
 }

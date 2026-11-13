@@ -4,7 +4,7 @@ import { JoinRoom } from './JoinRoom'
 import { Lobby } from './Lobby'
 import { Profile } from './Profile'
 import { saveSession } from './session'
-import { HomeScreen, StatusBanner } from './ui'
+import { HomeScreen, RemovedScreen, StatusBanner } from './ui'
 import { useServer } from './useServer'
 
 // How long an error stays on screen
@@ -38,15 +38,22 @@ function App() {
     }
   }
 
-  const { welcome } = server.state
+  const { welcome, removed } = server.state
   const room = showing.screen === 'profile' ? showing.code : null
 
   // Remember the seat as soon as the server gives one
   useEffect(() => {
     if (welcome && room) saveSession({ room, token: welcome.token })
   }, [welcome, room])
+  function home() {
+    server.restart()
+    setShowing({ screen: 'home' })
+  }
+
   let screen
-  if (welcome && showing.screen === 'profile') {
+  if (removed === 'kicked' || removed === 'banned') {
+    screen = <RemovedScreen kind={removed} onHome={home} />
+  } else if (welcome && showing.screen === 'profile') {
     screen = <Lobby code={showing.code} server={server} />
   } else if (showing.screen === 'profile') {
     screen = <Profile code={showing.code} server={server} />
