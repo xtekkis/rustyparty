@@ -56,7 +56,7 @@ function App() {
   } else if (welcome && showing.screen === 'profile') {
     screen = <Lobby code={showing.code} server={server} />
   } else if (showing.screen === 'profile') {
-    screen = <Profile code={showing.code} server={server} />
+    screen = <Profile code={showing.code} server={server} onBack={home} />
   } else if (showing.screen === 'join') {
     screen = (
       <JoinRoom

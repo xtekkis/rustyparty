@@ -65,12 +65,14 @@ export interface ProfileScreenProps {
   onNickname: (value: string) => void;
   onAvatar: (value: AvatarKind | null) => void;
   onEnter: () => void;
+  /** Back to home. Added in rustyparty, the same Back tile as the join screen. */
+  onBack: () => void;
 }
-export function ProfileScreen({ code, nickname, avatar, error, onNickname, onAvatar, onEnter }: ProfileScreenProps) {
+export function ProfileScreen({ code, nickname, avatar, error, onNickname, onAvatar, onEnter, onBack }: ProfileScreenProps) {
   return (
     <Screen
       glance={<><div className={styles.joinHead}><h1 className={styles.joinTitle}>Who's playing?</h1><span className={styles.small}><RoomCode code={code} /></span></div><NicknameField value={nickname} onChange={onNickname} error={error} /></>}
-      thumb={<><AvatarPicker nickname={nickname} value={avatar} onChange={onAvatar} /><Button disabled={[...nickname.trim()].length === 0} onClick={onEnter}>Enter room</Button></>} />
+      thumb={<><AvatarPicker nickname={nickname} value={avatar} onChange={onAvatar} /><div className={styles.backRow}><ActionTile icon="back" label="Back" aria-label="Back to home" onClick={onBack} /><Button disabled={[...nickname.trim()].length === 0} onClick={onEnter}>Enter room</Button></div></>} />
   );
 }
 

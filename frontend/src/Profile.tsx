@@ -9,9 +9,10 @@ import type { Server } from './useServer'
 interface ProfileProps {
   code: string
   server: Server
+  onBack: () => void
 }
 
-export function Profile({ code, server }: ProfileProps) {
+export function Profile({ code, server, onBack }: ProfileProps) {
   const [nickname, setNickname] = useState('')
   const [avatar, setAvatar] = useState<AvatarKind | null>(null)
   // The last error from before tapping Enter, so only a newer one is about this join.
@@ -53,6 +54,7 @@ export function Profile({ code, server }: ProfileProps) {
       onNickname={typed}
       onAvatar={setAvatar}
       onEnter={enter}
+      onBack={onBack}
     />
   )
 }
