@@ -27,11 +27,12 @@ export function Lobby({ code, server }: LobbyProps) {
   const players = lobby.players.map((player) => toPlayerView(player, lobby.host, secondsGone))
   const me = lobby.players.find((player) => player.id === welcome.player_id)
   const ready = me?.ready ?? false
+  const isHost = lobby.host === welcome.player_id
 
   return (
     <LobbyScreen
       code={code}
-      // The QR code, Copy and the host's settings come in the next steps
+      // The QR code and Copy come in the next steps
       qr={null}
       players={players}
       meId={String(welcome.player_id)}
@@ -39,6 +40,11 @@ export function Lobby({ code, server }: LobbyProps) {
       // The button changes when the server's lobby message says so, not before
       onToggleReady={() => server.send({ type: 'ready', ready: !ready })}
       onCopy={() => {}}
+      // Only the host gets the points setting, and Kick and Ban on everyone else
+      pointsToWin={isHost ? lobby.settings.points_to_win : undefined}
+      onPointsToWin={(value) => server.send({ type: 'room_settings', points_to_win: value })}
+      onKick={(id) => server.send({ type: 'kick', player_id: Number(id) })}
+      onBan={(id) => server.send({ type: 'ban', player_id: Number(id) })}
     />
   )
 }
