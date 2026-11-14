@@ -4,13 +4,18 @@ import { codeFromAddress } from './joinLink'
 import { JoinRoom } from './JoinRoom'
 import { Lobby } from './Lobby'
 import { Profile } from './Profile'
+import { Scan } from './Scan'
 import { saveSession } from './session'
 import { HomeScreen, RemovedScreen } from './ui'
 import { useFlash } from './useFlash'
 import { useServer } from './useServer'
 
 
-type Showing = { screen: 'home' } | { screen: 'join' } | { screen: 'profile'; code: string }
+type Showing =
+  | { screen: 'home' }
+  | { screen: 'join' }
+  | { screen: 'scan' }
+  | { screen: 'profile'; code: string }
 
 // The app's root: picks the screen
 function App() {
@@ -55,6 +60,15 @@ function App() {
   useEffect(() => {
     if (welcome && room) saveSession({ room, token: welcome.token })
   }, [welcome, room])
+  // Like an invite link: straight to the profile screen, with the room checked meanwhile
+  function scanned(code: string) {
+    setShowing({ screen: 'profile', code })
+    checkRoom(code).catch((failure: Error) => {
+      showFlash(failure.message, 'alert')
+      setShowing({ screen: 'join' })
+    })
+  }
+
   function home() {
     server.restart()
     setShowing({ screen: 'home' })
@@ -71,6 +85,15 @@ function App() {
     screen = (
       <JoinRoom
         onFound={(code) => setShowing({ screen: 'profile', code })}
+        onScan={() => setShowing({ screen: 'scan' })}
+        onBack={() => setShowing({ screen: 'home' })}
+      />
+    )
+  } else if (showing.screen === 'scan') {
+    screen = (
+      <Scan
+        onFound={scanned}
+        onTypeCode={() => setShowing({ screen: 'join' })}
         onBack={() => setShowing({ screen: 'home' })}
       />
     )

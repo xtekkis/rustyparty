@@ -1,22 +1,19 @@
 // Typing or pasting a room code. A full code is checked with the server straight away
 import { useEffect, useState } from 'react'
 import { checkRoom } from './api'
+import { codeFromText } from './joinLink'
 import { JoinCodeScreen } from './ui'
 
 const CODE_LENGTH = 4
 
-// A bare code like "kxtp", or an invite link ending in /join/KXTP
-function codeFromText(text: string): string | null {
-  const match = text.trim().match(/(?:^|\/join\/)([a-z]{4})$/i)
-  return match ? match[1].toUpperCase() : null
-}
 
 interface JoinRoomProps {
   onFound: (code: string) => void
+  onScan: () => void
   onBack: () => void
 }
 
-export function JoinRoom({ onFound, onBack }: JoinRoomProps) {
+export function JoinRoom({ onFound, onScan, onBack }: JoinRoomProps) {
   const [code, setCode] = useState('')
   const [error, setError] = useState<string | undefined>()
   const [checking, setChecking] = useState(false)
@@ -72,8 +69,7 @@ export function JoinRoom({ onFound, onBack }: JoinRoomProps) {
       checking={checking}
       onLetter={letter}
       onDelete={remove}
-      // The camera screen comes in a later step
-      onScan={() => {}}
+      onScan={onScan}
       onBack={onBack}
     />
   )
