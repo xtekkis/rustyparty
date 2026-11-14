@@ -4,11 +4,10 @@ import { JoinRoom } from './JoinRoom'
 import { Lobby } from './Lobby'
 import { Profile } from './Profile'
 import { saveSession } from './session'
-import { HomeScreen, RemovedScreen, StatusBanner } from './ui'
+import { HomeScreen, RemovedScreen } from './ui'
+import { useFlash } from './useFlash'
 import { useServer } from './useServer'
 
-// How long an error stays on screen
-const ERROR_MS = 4000
 
 type Showing = { screen: 'home' } | { screen: 'join' } | { screen: 'profile'; code: string }
 
@@ -17,13 +16,7 @@ function App() {
   const server = useServer()
   const [showing, setShowing] = useState<Showing>({ screen: 'home' })
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!error) return
-    const timer = setTimeout(() => setError(null), ERROR_MS)
-    return () => clearTimeout(timer)
-  }, [error])
+  const flash = useFlash()
 
   async function create() {
     // A second tap while waiting would make a second room
@@ -32,7 +25,7 @@ function App() {
     try {
       setShowing({ screen: 'profile', code: await createRoom() })
     } catch (failure) {
-      setError((failure as Error).message)
+      flash.show((failure as Error).message, 'alert')
     } finally {
       setBusy(false)
     }
@@ -71,11 +64,7 @@ function App() {
   return (
     <>
       {screen}
-      {error ? (
-        <div data-theme="platform">
-          <StatusBanner tone="alert">{error}</StatusBanner>
-        </div>
-      ) : null}
+      {flash.banner}
     </>
   )
 }
