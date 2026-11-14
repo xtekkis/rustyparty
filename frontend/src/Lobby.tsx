@@ -2,6 +2,7 @@
 import { QRCodeSVG } from 'qrcode.react'
 import { useEffect, useState } from 'react'
 import { copyText } from './clipboard'
+import { joinLink as linkTo } from './joinLink'
 import { toPlayerView } from './players'
 import { LobbyScreen } from './ui'
 import { useFlash } from './useFlash'
@@ -32,8 +33,7 @@ export function Lobby({ code, server }: LobbyProps) {
   const me = lobby.players.find((player) => player.id === welcome.player_id)
   const ready = me?.ready ?? false
   const isHost = lobby.host === welcome.player_id
-  // Where an invite takes a friend: straight to the profile screen for this room
-  const joinLink = `${location.origin}/join/${code}`
+  const joinLink = linkTo(code)
 
   async function copy() {
     if (await copyText(joinLink)) {

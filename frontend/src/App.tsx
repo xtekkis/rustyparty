@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { createRoom } from './api'
+import { checkRoom, createRoom } from './api'
+import { codeFromAddress } from './joinLink'
 import { JoinRoom } from './JoinRoom'
 import { Lobby } from './Lobby'
 import { Profile } from './Profile'
@@ -14,9 +15,25 @@ type Showing = { screen: 'home' } | { screen: 'join' } | { screen: 'profile'; co
 // The app's root: picks the screen
 function App() {
   const server = useServer()
-  const [showing, setShowing] = useState<Showing>({ screen: 'home' })
+  // An invite link opens the profile screen for its room
+  const [invited] = useState(codeFromAddress)
+  const [showing, setShowing] = useState<Showing>(
+    invited ? { screen: 'profile', code: invited } : { screen: 'home' },
+  )
   const [busy, setBusy] = useState(false)
   const flash = useFlash()
+  const showFlash = flash.show
+
+  useEffect(() => {
+    if (!invited) return
+    // Back to a plain address, so a reload or Back doesn't reopen the invite
+    history.replaceState(null, '', '/')
+    // A room that's gone sends the friend home, before they type a name for nothing
+    checkRoom(invited).catch((failure: Error) => {
+      showFlash(failure.message, 'alert')
+      setShowing({ screen: 'home' })
+    })
+  }, [invited, showFlash])
 
   async function create() {
     // A second tap while waiting would make a second room

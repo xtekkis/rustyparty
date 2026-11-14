@@ -1,5 +1,5 @@
 // A short message at the top of the screen that goes away by itself
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { StatusBanner } from './ui'
 
 interface Flash {
@@ -26,5 +26,11 @@ export function useFlash() {
     </div>
   ) : null
 
-  return { banner, show: (text: string, tone: Flash['tone'] = 'info') => setFlash({ text, tone }) }
+  // The same function every render, so effects can depend on it
+  const show = useCallback(
+    (text: string, tone: Flash['tone'] = 'info') => setFlash({ text, tone }),
+    [],
+  )
+
+  return { banner, show }
 }
