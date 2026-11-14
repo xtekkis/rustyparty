@@ -43,6 +43,17 @@ export function Lobby({ code, server }: LobbyProps) {
     }
   }
 
+  // The phone's own share menu, only on browsers that have one
+  const canShare = typeof navigator.share === 'function'
+  async function share() {
+    try {
+      await navigator.share({ title: 'rustyparty', text: `Join my rustyparty room ${code}`, url: joinLink })
+    } catch (error) {
+      // Closing the menu without picking anything isn't a failure
+      if ((error as Error).name !== 'AbortError') flash.show("Couldn't share the link", 'alert')
+    }
+  }
+
   return (
     <>
       <LobbyScreen
@@ -54,6 +65,7 @@ export function Lobby({ code, server }: LobbyProps) {
         // The button changes when the server's lobby message says so, not before
         onToggleReady={() => server.send({ type: 'ready', ready: !ready })}
         onCopy={copy}
+        onShare={canShare ? share : undefined}
         // Only the host gets the points setting, and Kick and Ban on everyone else
         pointsToWin={isHost ? lobby.settings.points_to_win : undefined}
         onPointsToWin={(value) => server.send({ type: 'room_settings', points_to_win: value })}
