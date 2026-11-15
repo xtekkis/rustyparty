@@ -12,7 +12,9 @@ export interface ServerState {
   // When the lobby message arrived, in ms, so reconnect countdowns can keep ticking
   lobbyAt: number
   vote: Of<'vote_state'> | null
-  voteResult: Of<'vote_result'> | null
+  // How the last vote ended: its result, or null when nobody voted. The vote is kept with it,
+  // because the server clears it the moment the game starts
+  voteEnd: { result: Of<'vote_result'> | null; vote: Of<'vote_state'> | null; at: number } | null
   game: Of<'game_view'> | null
   // Each game event gets the next number, so a screen can react to every one, even repeats
   event: { number: number; event: unknown } | null
@@ -28,7 +30,7 @@ export const initialState: ServerState = {
   lobby: null,
   lobbyAt: 0,
   vote: null,
-  voteResult: null,
+  voteEnd: null,
   game: null,
   event: null,
   results: null,
@@ -41,12 +43,17 @@ export function applyMessage(state: ServerState, message: ServerMessage, at = 0)
   switch (message.type) {
     case 'welcome':
       return { ...state, welcome: message }
-    case 'lobby':
-      return { ...leftoversCleared(state, message.phase), lobby: message, lobbyAt: at }
+    case 'lobby': {
+      // Straight from voting back to the lobby means nobody voted
+      const nobodyVoted = state.lobby?.phase === 'voting' && message.phase === 'lobby'
+      const cleared = leftoversCleared(state, message.phase)
+      const voteEnd = nobodyVoted ? { result: null, vote: state.vote, at } : cleared.voteEnd
+      return { ...cleared, voteEnd, lobby: message, lobbyAt: at }
+    }
     case 'vote_state':
       return { ...state, vote: message }
     case 'vote_result':
-      return { ...state, voteResult: message }
+      return { ...state, voteEnd: { result: message, vote: state.vote, at } }
     case 'game_view':
       return { ...state, game: message }
     case 'game_event':
@@ -68,7 +75,7 @@ function leftoversCleared(state: ServerState, phase: Of<'lobby'>['phase']): Serv
     case 'lobby':
       return { ...state, vote: null, game: null, event: null, results: null }
     case 'voting':
-      return { ...state, voteResult: null, game: null, event: null, results: null }
+      return { ...state, voteEnd: null, game: null, event: null, results: null }
     case 'in_game':
       return { ...state, vote: null, results: null }
     case 'results':

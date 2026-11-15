@@ -6,9 +6,11 @@ import { Lobby } from './Lobby'
 import { Profile } from './Profile'
 import { Scan } from './Scan'
 import { Vote } from './Vote'
+import { VoteResult } from './VoteResult'
 import { saveSession } from './session'
 import { HomeScreen, RemovedScreen, Screen, Strip } from './ui'
 import { useFlash } from './useFlash'
+import { useVoteBeat } from './useVoteBeat'
 import { useServer } from './useServer'
 
 
@@ -29,6 +31,7 @@ function App() {
   const [busy, setBusy] = useState(false)
   const flash = useFlash()
   const showFlash = flash.show
+  const voteJustEnded = useVoteBeat(server)
 
   useEffect(() => {
     if (!invited) return
@@ -79,8 +82,10 @@ function App() {
   if (removed === 'kicked' || removed === 'banned') {
     screen = <RemovedScreen kind={removed} onHome={home} />
   } else if (welcome && showing.screen === 'profile') {
-    // The room's phase picks the screen
-    if (lobby?.phase === 'voting') {
+    // The room's phase picks the screen, after a short beat for the vote's result
+    if (voteJustEnded) {
+      screen = <VoteResult server={server} />
+    } else if (lobby?.phase === 'voting') {
       screen = <Vote server={server} />
     } else if (lobby?.phase === 'in_game' || lobby?.phase === 'results') {
       // Until the game's own screens
