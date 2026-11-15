@@ -5,8 +5,9 @@ import { JoinRoom } from './JoinRoom'
 import { Lobby } from './Lobby'
 import { Profile } from './Profile'
 import { Scan } from './Scan'
+import { Vote } from './Vote'
 import { saveSession } from './session'
-import { HomeScreen, RemovedScreen } from './ui'
+import { HomeScreen, RemovedScreen, Screen, Strip } from './ui'
 import { useFlash } from './useFlash'
 import { useServer } from './useServer'
 
@@ -53,7 +54,7 @@ function App() {
     }
   }
 
-  const { welcome, removed } = server.state
+  const { welcome, removed, lobby } = server.state
   const room = showing.screen === 'profile' ? showing.code : null
 
   // Remember the seat as soon as the server gives one
@@ -78,7 +79,15 @@ function App() {
   if (removed === 'kicked' || removed === 'banned') {
     screen = <RemovedScreen kind={removed} onHome={home} />
   } else if (welcome && showing.screen === 'profile') {
-    screen = <Lobby code={showing.code} server={server} />
+    // The room's phase picks the screen
+    if (lobby?.phase === 'voting') {
+      screen = <Vote server={server} />
+    } else if (lobby?.phase === 'in_game' || lobby?.phase === 'results') {
+      // Until the game's own screens
+      screen = <Screen centerGlance glance={<Strip center>The game has started</Strip>} />
+    } else {
+      screen = <Lobby code={showing.code} server={server} />
+    }
   } else if (showing.screen === 'profile') {
     screen = <Profile code={showing.code} server={server} onBack={home} />
   } else if (showing.screen === 'join') {
