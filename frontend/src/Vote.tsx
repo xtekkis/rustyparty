@@ -1,4 +1,5 @@
 // Everyone picks a game. Voting ends when everyone has voted, or when time runs out
+import { toPlayerView } from './players'
 import { GameVoteScreen, type GameOption, type World } from './ui'
 import type { Server } from './useServer'
 
@@ -13,13 +14,20 @@ export function Vote({ server }: VoteProps) {
   const { welcome, lobby, vote } = server.state
   if (!welcome || !lobby || !vote) return null
 
+  // Everyone who voted for a game, as avatar bubbles on its card
+  const votersFor = (game: string) =>
+    (vote.votes[game] ?? []).flatMap((id) => {
+      const player = lobby.players.find((candidate) => candidate.id === id)
+      return player ? [toPlayerView(player, lobby.host)] : []
+    })
+
   const games: GameOption[] = vote.options.map((option) => ({
     id: option.id,
     name: option.name,
     description: option.description,
     world: WORLDS[option.id],
-    // Voters' avatars and greying out come in the next steps
-    voters: [],
+    voters: votersFor(option.id),
+    // Greying out games that don't fit comes in the next step
   }))
   const myVote = Object.keys(vote.votes).find((game) => vote.votes[game].includes(welcome.player_id))
   const votedCount = Object.values(vote.votes).reduce((count, voters) => count + voters.length, 0)
