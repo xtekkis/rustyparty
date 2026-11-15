@@ -1,10 +1,9 @@
 // Everyone picks a game. Voting ends when everyone has voted, or when time runs out
+import { unavailableReason, WORLDS } from './games'
 import { toPlayerView } from './players'
-import { GameVoteScreen, type GameOption, type World } from './ui'
+import { GameVoteScreen, type GameOption } from './ui'
 import type { Server } from './useServer'
 
-// Each game's own look on its card, by game id
-const WORLDS: Record<string, World> = { bad_takes: 'bad-takes' }
 
 interface VoteProps {
   server: Server
@@ -27,7 +26,8 @@ export function Vote({ server }: VoteProps) {
     description: option.description,
     world: WORLDS[option.id],
     voters: votersFor(option.id),
-    // Greying out games that don't fit comes in the next step
+    // A game that doesn't fit is greyed out, with why
+    unavailableReason: unavailableReason(option, lobby.players.length),
   }))
   const myVote = Object.keys(vote.votes).find((game) => vote.votes[game].includes(welcome.player_id))
   const votedCount = Object.values(vote.votes).reduce((count, voters) => count + voters.length, 0)
