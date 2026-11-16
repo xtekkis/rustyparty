@@ -1,8 +1,9 @@
 // Bad Takes on a phone: picks the screen from what the game's view says
-import { scoreRows } from '../../players'
+import { scoreRows, toPlayerView } from '../../players'
 import { LateJoinScreen, Screen, Strip } from '../../ui'
 import type { Server } from '../../useServer'
-import type { BadTakesView } from './protocol'
+import { Play } from './Play'
+import type { BadTakesAction, BadTakesView } from './protocol'
 
 interface BadTakesProps {
   server: Server
@@ -13,9 +14,30 @@ export function BadTakes({ server }: BadTakesProps) {
   if (!welcome || !lobby || !game) return null
   const view = game.view as BadTakesView
 
+  const me = welcome.player_id
+
   // Joined mid-game: seated at the next round, and sees the scores meanwhile
-  if (view.waiting.includes(welcome.player_id)) {
+  if (view.waiting.includes(me)) {
     return <LateJoinScreen world="bad-takes" rows={scoreRows(view.scores, lobby)} />
+  }
+
+  const send = (action: BadTakesAction) => server.send({ type: 'game_action', action })
+  const seconds = game.ends_in ?? 0
+  const judgePlayer = lobby.players.find((player) => player.id === view.judge)
+  const judge = judgePlayer ? toPlayerView(judgePlayer, lobby.host) : undefined
+  // Seated players are the ones with a score, and the judge doesn't play
+  const others = lobby.players
+    .filter((player) => String(player.id) in view.scores && player.id !== view.judge)
+    .map((player) => ({
+      ...toPlayerView(player, lobby.host),
+      played: view.submitted.includes(player.id),
+    }))
+
+  // Your turn to play: a new round's picks start empty, because the key changes
+  if (view.phase === 'submitting' && judge && me !== view.judge && !view.my_submission) {
+    return (
+      <Play key={view.round} view={view} judge={judge} others={others} seconds={seconds} onAction={send} />
+    )
   }
   // Until the round's own screens in the next steps
   return <Screen world="bad-takes" centerGlance glance={<Strip center>The game has started</Strip>} />
