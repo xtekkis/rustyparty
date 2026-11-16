@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { checkRoom, createRoom } from './api'
 import { codeFromAddress } from './joinLink'
+import { BadTakes } from './games/badTakes/BadTakes'
 import { JoinRoom } from './JoinRoom'
 import { Lobby } from './Lobby'
 import { Profile } from './Profile'
@@ -87,8 +88,10 @@ function App() {
       screen = <VoteResult server={server} />
     } else if (lobby?.phase === 'voting') {
       screen = <Vote server={server} />
+    } else if (lobby?.phase === 'in_game' && lobby.game === 'bad_takes') {
+      screen = <BadTakes server={server} />
     } else if (lobby?.phase === 'in_game' || lobby?.phase === 'results') {
-      // Until the game's own screens
+      // Until the results screen
       screen = <Screen centerGlance glance={<Strip center>The game has started</Strip>} />
     } else {
       screen = <Lobby code={showing.code} server={server} />
