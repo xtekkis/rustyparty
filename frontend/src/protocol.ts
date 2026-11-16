@@ -54,6 +54,8 @@ export type ServerMessage =
       host: number | null
       settings: RoomSettings
       phase: RoomPhase
+      // The running game's id, while the room is in a game or showing its results
+      game: string | null
     }
   // votes: game id to the ids of the players who voted for it
   | { type: 'vote_state'; options: VoteOption[]; votes: Record<string, number[]>; ends_in: number }

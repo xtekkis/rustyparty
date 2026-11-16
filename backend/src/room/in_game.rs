@@ -25,6 +25,7 @@ impl Room {
 
         self.state = RoomState::InGame {
             game,
+            game_id: info.id,
             number,
             ends_at: None,
         };
@@ -124,15 +125,21 @@ impl Room {
 
     // The game says it's over: show the results for a while
     pub(super) fn finish_game_if_over(&mut self, me: &WeakSender<RoomCommand>) {
-        let RoomState::InGame { game, number, .. } = &self.state else {
+        let RoomState::InGame {
+            game,
+            game_id,
+            number,
+            ..
+        } = &self.state
+        else {
             return;
         };
         if !game.is_finished() {
             return;
         }
 
-        let number = *number;
-        self.state = RoomState::Results { number };
+        let (number, game_id) = (*number, *game_id);
+        self.state = RoomState::Results { number, game_id };
         tracing::info!("Game {number} finished in room {}", self.code);
         self.broadcast(&self.lobby_message());
         self.broadcast(&ServerMessage::Results {

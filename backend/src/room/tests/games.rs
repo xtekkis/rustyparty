@@ -13,7 +13,7 @@ async fn finished_game_shows_results_then_the_lobby() {
         room.game_action(1, json!({ "kind": "press" }), &me);
     }
     room.finish_game_if_over(&me);
-    assert!(matches!(room.state, RoomState::Results { number: 1 }));
+    assert!(matches!(room.state, RoomState::Results { number: 1, .. }));
     let mut got_results = false;
     while let Ok(message) = phones[1].try_recv() {
         got_results |= matches!(message, ServerMessage::Results { ends_in: 10 });
@@ -89,6 +89,55 @@ async fn the_phase_follows_the_game_to_the_results_and_back() {
     assert_eq!(last_phase(&mut phones[0]), Some(RoomPhase::Lobby));
 }
 
+// The game id in the last lobby message this phone got
+fn last_game_id(phone: &mut UnboundedReceiver<ServerMessage>) -> Option<Option<&'static str>> {
+    drain(phone)
+        .into_iter()
+        .rev()
+        .find_map(|message| match message {
+            ServerMessage::Lobby { game, .. } => Some(game),
+            _ => None,
+        })
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_lobby_says_which_game_is_running() {
+    let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
+    let (commands, mut reminders) = mpsc::channel(8);
+    let me = commands.downgrade();
+
+    room.start_game(&DUMMY_INFO, &me);
+    assert_eq!(last_game_id(&mut phones[0]), Some(Some("dummy")));
+
+    // Still known on the results, which show that game's scores
+    for _ in 0..3 {
+        room.game_action(1, json!({ "kind": "press" }), &me);
+    }
+    room.finish_game_if_over(&me);
+    assert_eq!(last_game_id(&mut phones[0]), Some(Some("dummy")));
+
+    tokio::time::sleep(RESULTS_DURATION + Duration::from_secs(1)).await;
+    while let Ok(reminder) = reminders.try_recv() {
+        room.handle(reminder, &me);
+    }
+    assert_eq!(
+        last_game_id(&mut phones[0]),
+        Some(None),
+        "back in the lobby"
+    );
+}
+
+#[tokio::test]
+async fn a_late_joiner_hears_which_game_is_running() {
+    let (mut room, _phones) = room_with(&["Alex", "Sam", "Kim"]);
+    let (_commands, me) = test_me();
+    room.start_game(&DUMMY_INFO, &me);
+
+    let (connection, mut late) = mpsc::unbounded_channel();
+    room.join("Lee".to_string(), None, None, connection, &me);
+    assert_eq!(last_game_id(&mut late), Some(Some("dummy")));
+}
+
 #[tokio::test]
 async fn the_lobby_arrives_before_the_games_first_view() {
     let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
@@ -141,10 +190,13 @@ async fn unfinished_game_keeps_going() {
 async fn old_results_timer_is_ignored() {
     let (mut room, _phones) = room_with(&["Alex", "Sam", "Kim"]);
     let (_commands, me) = test_me();
-    room.state = RoomState::Results { number: 2 };
+    room.state = RoomState::Results {
+        number: 2,
+        game_id: "dummy",
+    };
 
     room.handle(RoomCommand::ResultsOver { number: 1 }, &me);
-    assert!(matches!(room.state, RoomState::Results { number: 2 }));
+    assert!(matches!(room.state, RoomState::Results { number: 2, .. }));
 }
 
 #[tokio::test]
@@ -270,6 +322,7 @@ fn game_timer_only_reaches_the_game_that_asked() {
     room.add_player("Alex".to_string(), None, connection);
     room.state = RoomState::InGame {
         game: Box::new(DummyGame::default()),
+        game_id: "dummy",
         number: 2,
         ends_at: None,
     };

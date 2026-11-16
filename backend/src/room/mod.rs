@@ -64,6 +64,8 @@ pub enum RoomState {
     },
     InGame {
         game: Box<dyn Game>,
+        // Which game it is, so phones that join late or come back know which screens to show
+        game_id: &'static str,
         // Counts up with every game, so a timer from an old game can't reach a new one
         number: u32,
         // When the timer the game started last runs out
@@ -72,6 +74,7 @@ pub enum RoomState {
     Results {
         // The game that just ended, so an old timer can't end a newer results screen
         number: u32,
+        game_id: &'static str,
     },
 }
 
@@ -299,17 +302,18 @@ impl Room {
                     .map(|since| seconds_until(since + DISCONNECT_GRACE)),
             })
             .collect();
-        let phase = match self.state {
-            RoomState::Lobby => RoomPhase::Lobby,
-            RoomState::Voting { .. } => RoomPhase::Voting,
-            RoomState::InGame { .. } => RoomPhase::InGame,
-            RoomState::Results { .. } => RoomPhase::Results,
+        let (phase, game) = match self.state {
+            RoomState::Lobby => (RoomPhase::Lobby, None),
+            RoomState::Voting { .. } => (RoomPhase::Voting, None),
+            RoomState::InGame { game_id, .. } => (RoomPhase::InGame, Some(game_id)),
+            RoomState::Results { game_id, .. } => (RoomPhase::Results, Some(game_id)),
         };
         ServerMessage::Lobby {
             players,
             host: self.host,
             settings: self.settings,
             phase,
+            game,
         }
     }
 

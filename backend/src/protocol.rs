@@ -90,6 +90,8 @@ pub enum ServerMessage {
         settings: RoomSettings,
         // Sent again every time it changes, so the latest lobby message says where the room is
         phase: RoomPhase,
+        // The running game's id, while the room is in a game or showing its results
+        game: Option<&'static str>,
     },
     VoteState {
         options: Vec<VoteOption>,

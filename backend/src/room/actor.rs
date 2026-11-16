@@ -195,7 +195,9 @@ impl Room {
                 let _ = reply.send(self.players.len());
             }
             RoomCommand::ResultsOver { number } => {
-                if let RoomState::Results { number: current } = self.state
+                if let RoomState::Results {
+                    number: current, ..
+                } = self.state
                     && current == number
                 {
                     self.return_to_lobby();

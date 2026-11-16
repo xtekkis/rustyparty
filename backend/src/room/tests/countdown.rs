@@ -85,6 +85,7 @@ async fn a_game_with_no_timer_has_no_countdown() {
     let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
     room.state = RoomState::InGame {
         game: Box::new(DummyGame::default()),
+        game_id: "dummy",
         number: 1,
         ends_at: None,
     };
