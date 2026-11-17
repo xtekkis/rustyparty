@@ -2,6 +2,7 @@
 import { scoreRows, toPlayerView } from '../../players'
 import { LateJoinScreen, Screen, Strip } from '../../ui'
 import type { Server } from '../../useServer'
+import { Judging } from './Judging'
 import { Play } from './Play'
 import { Reveal } from './Reveal'
 import { Wait } from './Wait'
@@ -69,6 +70,20 @@ export function BadTakes({ server }: BadTakesProps) {
         judge={judge}
         isJudge={me === view.judge}
         event={event}
+        onAction={send}
+      />
+    )
+  }
+
+  // Every answer shown together, until the judge gives one the point
+  if (judge && view.phase === 'judging') {
+    return (
+      <Judging
+        key={view.round}
+        view={view}
+        judge={judge}
+        isJudge={me === view.judge}
+        seconds={seconds}
         onAction={send}
       />
     )
