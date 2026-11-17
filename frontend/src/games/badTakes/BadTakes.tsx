@@ -3,6 +3,7 @@ import { scoreRows, toPlayerView } from '../../players'
 import { LateJoinScreen, Screen, Strip } from '../../ui'
 import type { Server } from '../../useServer'
 import { Play } from './Play'
+import { Reveal } from './Reveal'
 import { Wait } from './Wait'
 import type { BadTakesAction, BadTakesView } from './protocol'
 
@@ -59,6 +60,20 @@ export function BadTakes({ server }: BadTakesProps) {
       />
     )
   }
+  // Cards coming out of the bag, until the judge shows them all
+  if (judge && view.phase === 'reading') {
+    return (
+      <Reveal
+        key={view.round}
+        view={view}
+        judge={judge}
+        isJudge={me === view.judge}
+        event={event}
+        onAction={send}
+      />
+    )
+  }
+
   // Until the round's own screens in the next steps
   return <Screen world="bad-takes" centerGlance glance={<Strip center>The game has started</Strip>} />
 }
