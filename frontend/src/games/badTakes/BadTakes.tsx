@@ -5,6 +5,7 @@ import type { Server } from '../../useServer'
 import { Judging } from './Judging'
 import { Play } from './Play'
 import { Reveal } from './Reveal'
+import { Winner } from './Winner'
 import { Wait } from './Wait'
 import type { BadTakesAction, BadTakesView } from './protocol'
 
@@ -85,6 +86,19 @@ export function BadTakes({ server }: BadTakesProps) {
         isJudge={me === view.judge}
         seconds={seconds}
         onAction={send}
+      />
+    )
+  }
+
+  // The round's winner, with the scores going up
+  const winnerPlayer = lobby.players.find((player) => player.id === view.winner)
+  if (view.phase === 'round_over' && winnerPlayer) {
+    return (
+      <Winner
+        view={view}
+        winner={toPlayerView(winnerPlayer, lobby.host)}
+        rows={scoreRows(view.scores, lobby)}
+        event={event}
       />
     )
   }
