@@ -1,6 +1,6 @@
 // Bad Takes on a phone: picks the screen from what the game's view says
 import { scoreRows, toPlayerView } from '../../players'
-import { LateJoinScreen, Screen, Strip } from '../../ui'
+import { FinalResultsScreen, LateJoinScreen, Screen, Strip } from '../../ui'
 import type { Server } from '../../useServer'
 import { Judging } from './Judging'
 import { Play } from './Play'
@@ -14,11 +14,31 @@ interface BadTakesProps {
 }
 
 export function BadTakes({ server }: BadTakesProps) {
-  const { welcome, lobby, game, event } = server.state
-  if (!welcome || !lobby || !game) return null
+  const { welcome, lobby, game, event, results } = server.state
+  if (!welcome || !lobby) return null
+  if (!game) {
+    // Back during the final results: the server has already let the game go
+    return <Screen centerGlance glance={<Strip center>The game is over</Strip>} />
+  }
   const view = game.view as BadTakesView
-
   const me = welcome.player_id
+
+  // The game is over: the winner and their winning card, then back to the lobby
+  if (view.phase === 'game_over') {
+    const champion = lobby.players.find((player) => player.id === view.winner)
+    return (
+      <FinalResultsScreen
+        winner={champion ? toPlayerView(champion, lobby.host) : undefined}
+        line={
+          view.winning_cards
+            ? view.winning_cards.map((card) => card.text).join(' / ')
+            : 'Not enough players left'
+        }
+        rows={scoreRows(view.scores, lobby)}
+        secondsToLobby={results?.ends_in ?? 0}
+      />
+    )
+  }
 
   // Joined mid-game: seated at the next round, and sees the scores meanwhile
   if (view.waiting.includes(me)) {

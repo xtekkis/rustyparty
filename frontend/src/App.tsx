@@ -88,11 +88,14 @@ function App() {
       screen = <VoteResult server={server} />
     } else if (lobby?.phase === 'voting') {
       screen = <Vote server={server} />
-    } else if (lobby?.phase === 'in_game' && lobby.game === 'bad_takes') {
-      screen = <BadTakes server={server} />
     } else if (lobby?.phase === 'in_game' || lobby?.phase === 'results') {
-      // Until the results screen
-      screen = <Screen centerGlance glance={<Strip center>The game has started</Strip>} />
+      // The running game's own screens, results included
+      screen =
+        lobby.game === 'bad_takes' ? (
+          <BadTakes server={server} />
+        ) : (
+          <Screen centerGlance glance={<Strip center>This game isn't in the app yet</Strip>} />
+        )
     } else {
       screen = <Lobby code={showing.code} server={server} />
     }
