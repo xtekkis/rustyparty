@@ -2,22 +2,44 @@
 import { scoreRows, toPlayerView } from '../../players'
 import { FinalResultsScreen, LateJoinScreen, Screen, Strip } from '../../ui'
 import { useCountdown } from '../../useCountdown'
+import { useFlash } from '../../useFlash'
+import { useNewEvents } from '../../useNewEvents'
 import type { Server } from '../../useServer'
 import { Judging } from './Judging'
 import { Play } from './Play'
 import { Reveal } from './Reveal'
 import { Winner } from './Winner'
 import { Wait } from './Wait'
-import type { BadTakesAction, BadTakesView } from './protocol'
+import type { BadTakesAction, BadTakesEvent, BadTakesView } from './protocol'
 
 interface BadTakesProps {
   server: Server
 }
 
 export function BadTakes({ server }: BadTakesProps) {
-  const { welcome, lobby, game, event, results, gameAt, resultsAt } = server.state
+  const { game, events, results, gameAt, resultsAt } = server.state
   const seconds = useCountdown(game?.ends_in, gameAt)
   const secondsToLobby = useCountdown(results?.ends_in, resultsAt)
+  const flash = useFlash('bad-takes')
+
+  // Round messages, shown briefly over the next round
+  useNewEvents(events, (event) => {
+    const happened = (event as BadTakesEvent).event
+    if (happened === 'round_skipped') flash.show('Nobody played! New round')
+    if (happened === 'round_cancelled') flash.show('The judge left. Round cancelled, cards returned')
+  })
+
+  return (
+    <>
+      {screenFor(server, seconds, secondsToLobby)}
+      {flash.banner}
+    </>
+  )
+}
+
+// The screen for this phone, from what the game's view says
+function screenFor(server: Server, seconds: number, secondsToLobby: number) {
+  const { welcome, lobby, game, events } = server.state
   if (!welcome || !lobby) return null
   if (!game) {
     // Back during the final results: the server has already let the game go
@@ -79,7 +101,7 @@ export function BadTakes({ server }: BadTakesProps) {
         isJudge={me === view.judge}
         others={others}
         seconds={seconds}
-        event={event}
+        events={events}
         onAction={send}
       />
     )
@@ -92,7 +114,7 @@ export function BadTakes({ server }: BadTakesProps) {
         view={view}
         judge={judge}
         isJudge={me === view.judge}
-        event={event}
+        events={events}
         onAction={send}
       />
     )
@@ -120,7 +142,7 @@ export function BadTakes({ server }: BadTakesProps) {
         view={view}
         winner={toPlayerView(winnerPlayer, lobby.host)}
         rows={scoreRows(view.scores, lobby)}
-        event={event}
+        events={events}
       />
     )
   }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { checkRoom, createRoom } from './api'
 import { codeFromAddress } from './joinLink'
 import { BadTakes } from './games/badTakes/BadTakes'
@@ -58,7 +58,16 @@ function App() {
     }
   }
 
-  const { welcome, removed, lobby } = server.state
+  const { welcome, removed, lobby, error } = server.state
+
+  // Server errors once in a room. Before that, the join screens show them where they belong.
+  // Each error is shown once, so an old one never comes back when something else changes
+  const lastError = useRef(error)
+  useEffect(() => {
+    if (error === lastError.current) return
+    lastError.current = error
+    if (error && welcome) showFlash(error.message, 'alert')
+  }, [error, welcome, showFlash])
   const room = showing.screen === 'profile' ? showing.code : null
 
   // Remember the seat as soon as the server gives one

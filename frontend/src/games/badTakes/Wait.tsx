@@ -1,6 +1,8 @@
 // While people play: their cards drop into the bag. Once everyone's in, the judge pulls the first card
-import { useEffect, useRef } from 'react'
+import { useRef } from 'react'
+import type { GameEvent } from '../../serverState'
 import { BadTakesWaitScreen, type CardBagHandle, type PlayerView } from '../../ui'
+import { useNewEvents } from '../../useNewEvents'
 import type { BadTakesAction, BadTakesEvent, BadTakesView } from './protocol'
 
 interface WaitProps {
@@ -9,20 +11,19 @@ interface WaitProps {
   isJudge: boolean
   others: (PlayerView & { played: boolean })[]
   seconds: number
-  // The latest game event, a new object each time one arrives
-  event: { number: number; event: unknown } | null
+  events: GameEvent[]
   onAction: (action: BadTakesAction) => void
 }
 
-export function Wait({ view, judge, isJudge, others, seconds, event, onAction }: WaitProps) {
+export function Wait({ view, judge, isJudge, others, seconds, events, onAction }: WaitProps) {
   const bag = useRef<CardBagHandle>(null)
 
   // Each time someone plays, a face-down card flies from their face on the strip into the bag
-  useEffect(() => {
-    const played = event?.event as BadTakesEvent | undefined
-    if (played?.event !== 'submitted') return
+  useNewEvents(events, (event) => {
+    const played = event as BadTakesEvent
+    if (played.event !== 'submitted') return
     void bag.current?.dropIn(document.querySelector(`[data-player="${played.player}"]`))
-  }, [event])
+  })
 
   if (!view.prompt) return null
   return (

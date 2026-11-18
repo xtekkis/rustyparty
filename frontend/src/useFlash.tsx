@@ -1,6 +1,6 @@
 // A short message at the top of the screen that goes away by itself
 import { useCallback, useEffect, useState } from 'react'
-import { StatusBanner } from './ui'
+import { StatusBanner, type World } from './ui'
 
 interface Flash {
   text: string
@@ -10,7 +10,8 @@ interface Flash {
 // Errors stay a little longer than good news
 const SHOWN_FOR_MS = { info: 2500, alert: 4000 }
 
-export function useFlash() {
+// world: the screens it shows over, so it takes their colours and fonts
+export function useFlash(world: World = 'platform') {
   const [flash, setFlash] = useState<Flash | null>(null)
 
   useEffect(() => {
@@ -20,8 +21,8 @@ export function useFlash() {
   }, [flash])
 
   const banner = flash ? (
-    // Outside any screen, so it brings the platform's colours and fonts with it
-    <div data-theme="platform">
+    // Outside any screen, so it brings its world's colours and fonts with it
+    <div data-theme={world}>
       <StatusBanner tone={flash.tone}>{flash.text}</StatusBanner>
     </div>
   ) : null

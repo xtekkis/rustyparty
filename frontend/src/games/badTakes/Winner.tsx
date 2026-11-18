@@ -1,4 +1,5 @@
 // Who won the round: their answer in the prompt, and the scores with their +1
+import type { GameEvent } from '../../serverState'
 import { BadTakesWinnerScreen, type PlayerView, type ScoreRow } from '../../ui'
 import type { BadTakesEvent, BadTakesView } from './protocol'
 
@@ -6,14 +7,15 @@ interface WinnerProps {
   view: BadTakesView
   winner: PlayerView
   rows: ScoreRow[]
-  // The latest game event, a new object each time one arrives
-  event: { number: number; event: unknown } | null
+  events: GameEvent[]
 }
 
-export function Winner({ view, winner, rows, event }: WinnerProps) {
+export function Winner({ view, winner, rows, events }: WinnerProps) {
   if (!view.prompt) return null
   // Only the reveal event says whether the judge ran out of time
-  const revealed = event?.event as BadTakesEvent | undefined
+  const revealed = events
+    .map((candidate) => candidate.event as BadTakesEvent)
+    .findLast((candidate) => candidate.event === 'winner_revealed')
   const timedOut = revealed?.event === 'winner_revealed' && revealed.judge_timed_out
 
   return (

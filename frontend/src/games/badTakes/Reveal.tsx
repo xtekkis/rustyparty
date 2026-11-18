@@ -1,5 +1,6 @@
 // The judge pulls the answers out of the bag one at a time, and each lands in the prompt
 import { useEffect, useRef, useState } from 'react'
+import type { GameEvent } from '../../serverState'
 import { BadTakesRevealScreen, type CardBagHandle, type PlayerView } from '../../ui'
 import type { BadTakesAction, BadTakesEvent, BadTakesView } from './protocol'
 
@@ -7,18 +8,19 @@ interface RevealProps {
   view: BadTakesView
   judge: PlayerView
   isJudge: boolean
-  // The latest game event, a new object each time one arrives
-  event: { number: number; event: unknown } | null
+  events: GameEvent[]
   onAction: (action: BadTakesAction) => void
 }
 
 type Pulled = Extract<BadTakesEvent, { event: 'answer_pulled' }>
-const pulledIn = (event: RevealProps['event']) => {
+const pulledIn = (event: GameEvent | undefined) => {
   const game = event?.event as BadTakesEvent | undefined
   return game?.event === 'answer_pulled' ? game : null
 }
 
-export function Reveal({ view, judge, isJudge, event, onAction }: RevealProps) {
+export function Reveal({ view, judge, isJudge, events, onAction }: RevealProps) {
+  // The latest pull, the same object until the next one arrives
+  const event = events.findLast((candidate) => pulledIn(candidate))
   const bag = useRef<CardBagHandle>(null)
   // The number of the pull event whose card has landed in the prompt
   const [landed, setLanded] = useState<number | null>(null)

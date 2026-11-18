@@ -4,6 +4,15 @@ import type { ServerMessage } from './protocol'
 // The server message of one type, like Of<'lobby'>
 type Of<T extends ServerMessage['type']> = Extract<ServerMessage, { type: T }>
 
+// A game event and its number. Numbers only ever go up, so a screen can tell which it has seen
+export interface GameEvent {
+  number: number
+  event: unknown
+}
+
+// Plenty for any burst of events between two redraws
+const RECENT_EVENTS = 20
+
 export interface ServerState {
   // Who this phone is, once the server has let it in
   welcome: Of<'welcome'> | null
@@ -20,8 +29,10 @@ export interface ServerState {
   // because the server clears it the moment the game starts
   voteEnd: { result: Of<'vote_result'> | null; vote: Of<'vote_state'> | null; at: number } | null
   game: Of<'game_view'> | null
-  // Each game event gets the next number, so a screen can react to every one, even repeats
-  event: { number: number; event: unknown } | null
+  // Recent game events, newest last. A list, because two can arrive before the screen redraws
+  events: GameEvent[]
+  // How many game events have ever arrived, for numbering them
+  eventCount: number
   results: Of<'results'> | null
   // The last error, for a screen to show briefly
   error: Of<'error'> | null
@@ -39,7 +50,8 @@ export const initialState: ServerState = {
   resultsAt: 0,
   voteEnd: null,
   game: null,
-  event: null,
+  events: [],
+  eventCount: 0,
   results: null,
   error: null,
   removed: null,
@@ -63,8 +75,11 @@ export function applyMessage(state: ServerState, message: ServerMessage, at = 0)
       return { ...state, voteEnd: { result: message, vote: state.vote, at } }
     case 'game_view':
       return { ...state, game: message, gameAt: at }
-    case 'game_event':
-      return { ...state, event: { number: (state.event?.number ?? 0) + 1, event: message.event } }
+    case 'game_event': {
+      const number = state.eventCount + 1
+      const events = [...state.events, { number, event: message.event }].slice(-RECENT_EVENTS)
+      return { ...state, events, eventCount: number }
+    }
     case 'results':
       return { ...state, results: message, resultsAt: at }
     case 'error':
@@ -80,9 +95,9 @@ export function applyMessage(state: ServerState, message: ServerMessage, at = 0)
 function leftoversCleared(state: ServerState, phase: Of<'lobby'>['phase']): ServerState {
   switch (phase) {
     case 'lobby':
-      return { ...state, vote: null, game: null, event: null, results: null }
+      return { ...state, vote: null, game: null, events: [], results: null }
     case 'voting':
-      return { ...state, voteEnd: null, game: null, event: null, results: null }
+      return { ...state, voteEnd: null, game: null, events: [], results: null }
     case 'in_game':
       return { ...state, vote: null, results: null }
     case 'results':
