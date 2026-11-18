@@ -8,7 +8,7 @@ import { Profile } from './Profile'
 import { Scan } from './Scan'
 import { Vote } from './Vote'
 import { VoteResult } from './VoteResult'
-import { saveSession } from './session'
+import { savedToken } from './session'
 import { HomeScreen, RemovedScreen, Screen, Strip } from './ui'
 import { useFlash } from './useFlash'
 import { useVoteBeat } from './useVoteBeat'
@@ -24,21 +24,27 @@ type Showing =
 
 // The app's root: picks the screen
 function App() {
-  const server = useServer()
-  // An invite link opens the profile screen for its room
+  // An invite link opens the profile screen for its room.
+  // A phone that already has a seat there goes straight back in instead
   const [invited] = useState(codeFromAddress)
-  const [showing, setShowing] = useState<Showing>(
-    invited ? { screen: 'profile', code: invited } : { screen: 'home' },
+  const [showing, setShowing] = useState<Showing>(() =>
+    invited && !savedToken(invited) ? { screen: 'profile', code: invited } : { screen: 'home' },
   )
   const [busy, setBusy] = useState(false)
   const flash = useFlash()
   const showFlash = flash.show
+  const server = useServer(invited, (message) => {
+    showFlash(message, 'alert')
+    setShowing({ screen: 'home' })
+  })
   const voteJustEnded = useVoteBeat(server)
 
   useEffect(() => {
     if (!invited) return
     // Back to a plain address, so a reload or Back doesn't reopen the invite
     history.replaceState(null, '', '/')
+    // A saved seat there is checked by asking for it back
+    if (savedToken(invited)) return
     // A room that's gone sends the friend home, before they type a name for nothing
     checkRoom(invited).catch((failure: Error) => {
       showFlash(failure.message, 'alert')
@@ -72,12 +78,7 @@ function App() {
     lastError.current = error
     if (error && welcome) showFlash(error.message, 'alert')
   }, [error, welcome, showFlash])
-  const room = showing.screen === 'profile' ? showing.code : null
 
-  // Remember the seat as soon as the server gives one
-  useEffect(() => {
-    if (welcome && room) saveSession({ room, token: welcome.token })
-  }, [welcome, room])
   // Like an invite link: straight to the profile screen, with the room checked meanwhile
   function scanned(code: string) {
     setShowing({ screen: 'profile', code })
@@ -95,7 +96,7 @@ function App() {
   let screen
   if (removed === 'kicked' || removed === 'banned') {
     screen = <RemovedScreen kind={removed} onHome={home} />
-  } else if (welcome && showing.screen === 'profile') {
+  } else if (welcome && server.room) {
     // The room's phase picks the screen, after a short beat for the vote's result
     if (voteJustEnded) {
       screen = <VoteResult server={server} />
@@ -110,8 +111,11 @@ function App() {
           <Screen centerGlance glance={<Strip center>This game isn't in the app yet</Strip>} />
         )
     } else {
-      screen = <Lobby code={showing.code} server={server} />
+      screen = <Lobby code={server.room} server={server} />
     }
+  } else if (server.room) {
+    // Asking for the saved seat back, after a reload or reopening the app
+    screen = <Screen centerGlance glance={<Strip center>Getting your seat back</Strip>} />
   } else if (showing.screen === 'profile') {
     screen = <Profile code={showing.code} server={server} onBack={home} />
   } else if (showing.screen === 'join') {
