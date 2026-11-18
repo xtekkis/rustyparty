@@ -12,6 +12,7 @@ import { saveSession } from './session'
 import { HomeScreen, RemovedScreen, Screen, Strip } from './ui'
 import { useFlash } from './useFlash'
 import { useVoteBeat } from './useVoteBeat'
+import { useWakeLock } from './useWakeLock'
 import { useServer } from './useServer'
 
 
@@ -59,6 +60,9 @@ function App() {
   }
 
   const { welcome, removed, lobby, error } = server.state
+
+  // The screen stays on from the vote to the final results
+  useWakeLock(lobby?.phase === 'voting' || lobby?.phase === 'in_game' || lobby?.phase === 'results')
 
   // Server errors once in a room. Before that, the join screens show them where they belong.
   // Each error is shown once, so an old one never comes back when something else changes
