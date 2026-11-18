@@ -1,6 +1,7 @@
 // Bad Takes on a phone: picks the screen from what the game's view says
 import { scoreRows, toPlayerView } from '../../players'
 import { FinalResultsScreen, LateJoinScreen, Screen, Strip } from '../../ui'
+import { useCountdown } from '../../useCountdown'
 import type { Server } from '../../useServer'
 import { Judging } from './Judging'
 import { Play } from './Play'
@@ -14,7 +15,9 @@ interface BadTakesProps {
 }
 
 export function BadTakes({ server }: BadTakesProps) {
-  const { welcome, lobby, game, event, results } = server.state
+  const { welcome, lobby, game, event, results, gameAt, resultsAt } = server.state
+  const seconds = useCountdown(game?.ends_in, gameAt)
+  const secondsToLobby = useCountdown(results?.ends_in, resultsAt)
   if (!welcome || !lobby) return null
   if (!game) {
     // Back during the final results: the server has already let the game go
@@ -35,7 +38,7 @@ export function BadTakes({ server }: BadTakesProps) {
             : 'Not enough players left'
         }
         rows={scoreRows(view.scores, lobby)}
-        secondsToLobby={results?.ends_in ?? 0}
+        secondsToLobby={secondsToLobby}
       />
     )
   }
@@ -46,7 +49,6 @@ export function BadTakes({ server }: BadTakesProps) {
   }
 
   const send = (action: BadTakesAction) => server.send({ type: 'game_action', action })
-  const seconds = game.ends_in ?? 0
   const judgePlayer = lobby.players.find((player) => player.id === view.judge)
   const judge = judgePlayer ? toPlayerView(judgePlayer, lobby.host) : undefined
   // Seated players are the ones with a score, and the judge doesn't play

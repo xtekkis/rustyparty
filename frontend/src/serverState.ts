@@ -12,6 +12,10 @@ export interface ServerState {
   // When the lobby message arrived, in ms, so reconnect countdowns can keep ticking
   lobbyAt: number
   vote: Of<'vote_state'> | null
+  // When the latest vote, game view and results messages arrived, in ms, so countdowns keep ticking
+  voteAt: number
+  gameAt: number
+  resultsAt: number
   // How the last vote ended: its result, or null when nobody voted. The vote is kept with it,
   // because the server clears it the moment the game starts
   voteEnd: { result: Of<'vote_result'> | null; vote: Of<'vote_state'> | null; at: number } | null
@@ -30,6 +34,9 @@ export const initialState: ServerState = {
   lobby: null,
   lobbyAt: 0,
   vote: null,
+  voteAt: 0,
+  gameAt: 0,
+  resultsAt: 0,
   voteEnd: null,
   game: null,
   event: null,
@@ -51,15 +58,15 @@ export function applyMessage(state: ServerState, message: ServerMessage, at = 0)
       return { ...cleared, voteEnd, lobby: message, lobbyAt: at }
     }
     case 'vote_state':
-      return { ...state, vote: message }
+      return { ...state, vote: message, voteAt: at }
     case 'vote_result':
       return { ...state, voteEnd: { result: message, vote: state.vote, at } }
     case 'game_view':
-      return { ...state, game: message }
+      return { ...state, game: message, gameAt: at }
     case 'game_event':
       return { ...state, event: { number: (state.event?.number ?? 0) + 1, event: message.event } }
     case 'results':
-      return { ...state, results: message }
+      return { ...state, results: message, resultsAt: at }
     case 'error':
       return { ...state, error: message }
     case 'kicked':

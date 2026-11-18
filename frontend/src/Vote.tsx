@@ -1,6 +1,7 @@
 // Everyone picks a game. Voting ends when everyone has voted, or when time runs out
 import { gameOptions } from './games'
 import { GameVoteScreen } from './ui'
+import { useCountdown } from './useCountdown'
 import type { Server } from './useServer'
 
 interface VoteProps {
@@ -8,7 +9,8 @@ interface VoteProps {
 }
 
 export function Vote({ server }: VoteProps) {
-  const { welcome, lobby, vote } = server.state
+  const { welcome, lobby, vote, voteAt } = server.state
+  const seconds = useCountdown(vote?.ends_in, voteAt)
   if (!welcome || !lobby || !vote) return null
 
   const myVote = Object.keys(vote.votes).find((game) => vote.votes[game].includes(welcome.player_id))
@@ -20,7 +22,7 @@ export function Vote({ server }: VoteProps) {
     <GameVoteScreen
       games={gameOptions(vote, lobby)}
       myVote={myVote}
-      seconds={vote.ends_in}
+      seconds={seconds}
       votedCount={votedCount}
       playerCount={playerCount}
       onVote={(game) => server.send({ type: 'vote', game })}
