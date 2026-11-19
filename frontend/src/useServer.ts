@@ -170,7 +170,9 @@ export function useServer(openedFor: string | null, onSeatLost: (message: string
   // Start again with nothing from the old room, like after being removed from it
   const restart = useCallback(() => {
     if (seatNow.current) {
-      clearSession()
+      // Only a replaced seat is still held after the server stops, and it stays saved:
+      // another tab in this browser may be the one using it
+      if (!stopped.current) clearSession()
       changeSeat(null)
     }
     joining.current = null
@@ -180,5 +182,13 @@ export function useServer(openedFor: string | null, onSeatLost: (message: string
     setConnection((count) => count + 1)
   }, [changeSeat])
 
-  return { status, state, send, restart, room: seat?.room ?? null }
+  // Take the seat back from the tab or phone that opened it since
+  const takeBack = useCallback(() => {
+    dispatch('forget')
+    retries.current = 0
+    setStatus('connecting')
+    setConnection((count) => count + 1)
+  }, [])
+
+  return { status, state, send, restart, takeBack, room: seat?.room ?? null }
 }

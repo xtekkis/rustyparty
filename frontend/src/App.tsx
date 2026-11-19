@@ -5,6 +5,7 @@ import { BadTakes } from './games/badTakes/BadTakes'
 import { JoinRoom } from './JoinRoom'
 import { Lobby } from './Lobby'
 import { Profile } from './Profile'
+import { Replaced } from './Replaced'
 import { Scan } from './Scan'
 import { Vote } from './Vote'
 import { VoteResult } from './VoteResult'
@@ -74,9 +75,9 @@ function App() {
   // The screen stays on from the vote to the final results
   useWakeLock(lobby?.phase === 'voting' || lobby?.phase === 'in_game' || lobby?.phase === 'results')
 
-  // In a room but cut off from the server for more than a moment
+  // In a room but cut off from the server for more than a moment, and not closed on purpose
   const reconnecting = useLasting(
-    server.status !== 'open' && welcome !== null && server.room !== null,
+    server.status !== 'open' && welcome !== null && server.room !== null && removed === null,
     RECONNECTING_AFTER_MS,
   )
   const inGame = lobby?.phase === 'in_game' || lobby?.phase === 'results'
@@ -108,6 +109,8 @@ function App() {
   let screen
   if (removed === 'kicked' || removed === 'banned') {
     screen = <RemovedScreen kind={removed} onHome={home} />
+  } else if (removed === 'replaced') {
+    screen = <Replaced server={server} onHome={home} />
   } else if (welcome && server.room) {
     // The room's phase picks the screen, after a short beat for the vote's result
     if (voteJustEnded) {
