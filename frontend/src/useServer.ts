@@ -12,6 +12,8 @@ export type Server = ReturnType<typeof useServer>
 
 // Seconds to wait before each try to reconnect. The last one repeats
 const RETRY_SECONDS = [1, 2, 4, 8]
+// Away from the app this long, an open-looking connection may be dead, so a fresh one is made
+const STALE_AFTER_MS = 5000
 
 // Same address as the page. In development Vite passes /ws on to the backend
 function serverUrl(): string {
@@ -44,6 +46,8 @@ export function useServer(openedFor: string | null, onSeatLost: (message: string
   // Counts up for each new connection
   const [connection, setConnection] = useState(0)
   const retries = useRef(0)
+  // Set once the server has closed this connection on purpose
+  const stopped = useRef(false)
 
   // The room this phone is in and the token that gets it back in.
   // The ref is for the socket's handlers, the state is for screens
@@ -70,8 +74,7 @@ export function useServer(openedFor: string | null, onSeatLost: (message: string
   useEffect(() => {
     const ws = new WebSocket(serverUrl())
     socket.current = ws
-    // Set once the server has closed this connection on purpose
-    let stopped = false
+    stopped.current = false
     let retry: ReturnType<typeof setTimeout> | undefined
 
     ws.onopen = () => {
@@ -88,7 +91,7 @@ export function useServer(openedFor: string | null, onSeatLost: (message: string
 
     ws.onclose = () => {
       setStatus('closed')
-      if (stopped) return
+      if (stopped.current) return
       const wait = RETRY_SECONDS[Math.min(retries.current, RETRY_SECONDS.length - 1)]
       retries.current += 1
       retry = setTimeout(() => {
@@ -119,7 +122,7 @@ export function useServer(openedFor: string | null, onSeatLost: (message: string
         }
       } else if (message.type === 'kicked' || message.type === 'banned' || message.type === 'replaced') {
         // The server closes the connection after these, and coming back would undo them
-        stopped = true
+        stopped.current = true
         if (message.type === 'kicked') clearSession()
         if (message.type !== 'replaced') changeSeat(null)
       }
@@ -135,6 +138,27 @@ export function useServer(openedFor: string | null, onSeatLost: (message: string
       clearTimeout(retry)
     }
   }, [connection, changeSeat])
+
+  // Back in the app after the phone was locked or another app was open
+  useEffect(() => {
+    let hiddenAt = 0
+    function changed() {
+      if (document.hidden) {
+        hiddenAt = Date.now()
+        return
+      }
+      if (stopped.current) return
+      const state = socket.current?.readyState
+      const working = state === WebSocket.OPEN || state === WebSocket.CONNECTING
+      if (working && Date.now() - hiddenAt < STALE_AFTER_MS) return
+      // Straight away, without waiting for the next try
+      retries.current = 0
+      setStatus('connecting')
+      setConnection((count) => count + 1)
+    }
+    document.addEventListener('visibilitychange', changed)
+    return () => document.removeEventListener('visibilitychange', changed)
+  }, [])
 
   // Dropped while the connection isn't open
   const send = useCallback((message: ClientMessage) => {
