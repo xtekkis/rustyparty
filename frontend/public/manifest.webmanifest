@@ -1,0 +1,11 @@
+{
+  "name": "Rusty Party",
+  "short_name": "Rusty Party",
+  "description": "Party games for the room you're in.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#11463a",
+  "theme_color": "#11463a"
+}
