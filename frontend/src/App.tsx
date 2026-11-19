@@ -9,12 +9,16 @@ import { Scan } from './Scan'
 import { Vote } from './Vote'
 import { VoteResult } from './VoteResult'
 import { savedToken } from './session'
-import { HomeScreen, RemovedScreen, Screen, Strip } from './ui'
+import { HomeScreen, RemovedScreen, Screen, StatusBanner, Strip, type World } from './ui'
 import { useFlash } from './useFlash'
+import { useLasting } from './useLasting'
 import { useVoteBeat } from './useVoteBeat'
 import { useWakeLock } from './useWakeLock'
 import { useServer } from './useServer'
 
+
+// A quick fresh connection, like after unlocking the phone, is done before this and shows nothing
+const RECONNECTING_AFTER_MS = 1000
 
 type Showing =
   | { screen: 'home' }
@@ -69,6 +73,14 @@ function App() {
 
   // The screen stays on from the vote to the final results
   useWakeLock(lobby?.phase === 'voting' || lobby?.phase === 'in_game' || lobby?.phase === 'results')
+
+  // In a room but cut off from the server for more than a moment
+  const reconnecting = useLasting(
+    server.status !== 'open' && welcome !== null && server.room !== null,
+    RECONNECTING_AFTER_MS,
+  )
+  const inGame = lobby?.phase === 'in_game' || lobby?.phase === 'results'
+  const world: World = inGame && lobby?.game === 'bad_takes' ? 'bad-takes' : 'platform'
 
   // Server errors once in a room. Before that, the join screens show them where they belong.
   // Each error is shown once, so an old one never comes back when something else changes
@@ -141,7 +153,14 @@ function App() {
   return (
     <>
       {screen}
-      {flash.banner}
+      {reconnecting ? (
+        // Takes the banner's place at the top, in the colours of the screen below it
+        <div data-theme={world}>
+          <StatusBanner>Reconnecting…</StatusBanner>
+        </div>
+      ) : (
+        flash.banner
+      )}
     </>
   )
 }
