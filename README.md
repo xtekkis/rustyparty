@@ -2,11 +2,11 @@
 
 A real-time party game platform built in Rust. Players join a room from their phone with a short code, vote on a game, and play together live.
 
-This project is in early development. Right now only the backend server exists.
+This project is in development. The server and the phone app both work, and a full game of Bad Takes can be played from the lobby to the final scores. It isn't online yet.
 
 ## How it works
 
-- **No app, no account.** Everyone plays in their phone's browser. One player creates a room and gets a 4-letter code like `KXTP`.
+- **No app store, no account.** Everyone plays in their phone's browser, and it can be added to the home screen like an app. One player creates a room and gets a 4-letter code like `KXTP`.
 - **Easy to join.** Friends type the code, scan a QR code, or open a shared link. They pick a nickname and an avatar.
 - **Vote on the game.** When everyone is ready, the room votes on which game to play. Votes show up live.
 - **Play again.** After a game the scores are shown and the room goes back to the lobby, so the same group can play again or pick another game.
@@ -25,4 +25,4 @@ Every game is a separate module on a shared engine. Rooms, voting, reconnecting 
 ## Tech
 
 - **Backend:** Rust, Axum, Tokio
-- **Frontend (coming later):** React, TypeScript, Vite
+- **Frontend:** React, TypeScript, Vite
