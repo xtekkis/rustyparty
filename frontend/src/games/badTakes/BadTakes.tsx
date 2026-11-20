@@ -147,6 +147,6 @@ function screenFor(server: Server, seconds: number, secondsToLobby: number) {
     )
   }
 
-  // Until the round's own screens in the next steps
-  return <Screen world="bad-takes" centerGlance glance={<Strip center>The game has started</Strip>} />
+  // Only for a moment, when the judge or the round's winner has just left the room
+  return <Screen world="bad-takes" centerGlance glance={<Strip center>Next round coming up</Strip>} />
 }
