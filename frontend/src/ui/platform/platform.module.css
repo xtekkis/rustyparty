@@ -53,18 +53,19 @@
 .gameOn{outline:4px solid var(--selected)}
 .gameName{display:block;font:400 24px/1.1 var(--world-display);margin-bottom:5px}
 .gameText{display:block;font:500 16px/1.3 var(--world-body)}
-.voters{display:flex;gap:6px;margin-top:10px;min-height:26px}
+.voters{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;min-height:26px}/* flex-wrap added in rustyparty */
 .gameOff{background:var(--panel);box-shadow:none;cursor:not-allowed;color:var(--muted)}
 .gameOffName{font:700 16px/1.25 var(--world-body)}
 /* scores */
 .score{background:var(--panel);box-shadow:var(--shadow-hard);padding:0 var(--space-3);border-radius:var(--radius-tile);overflow-y:auto;min-height:0}
 .scoreRow{display:flex;align-items:center;gap:10px;min-height:var(--tap-min);font-weight:700}
 .scoreRow + .scoreRow{border-top:2px solid var(--divider)}
+.scoreName{min-width:0;overflow-wrap:anywhere}/* added in rustyparty */
 .plus{color:var(--accent-text)}
 .points_n{margin-left:auto;font:400 22px/1 var(--world-display)}
 [data-theme="bad-takes"] .points_n{font-size:19px}
 .champ{display:grid;justify-items:center;gap:var(--space-3);text-align:center;padding-top:6px;width:100%}
-.champTitle{margin:0;font:400 42px/1 var(--world-display);text-wrap:balance}
+.champTitle{margin:0;font:400 42px/1 var(--world-display);text-wrap:balance;overflow-wrap:anywhere}/* overflow-wrap added in rustyparty */
 @container (min-aspect-ratio:3/2) and (max-height:520px){
   .slots{gap:var(--space-1)}
   .slots>*{width:44px!important;height:58px!important;font-size:30px!important}

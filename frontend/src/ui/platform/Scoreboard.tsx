@@ -10,7 +10,8 @@ export function Scoreboard({ rows }: { rows: ScoreRow[] }) {
       {sorted.map((r) => (
         <div key={r.player.id} role="listitem" className={styles.scoreRow}>
           <Avatar nickname={r.player.nickname} kind={r.player.avatar} size="xs" />
-          <span>{r.player.nickname}</span>
+          {/* scoreName added in rustyparty: long names wrap */}
+          <span className={styles.scoreName}>{r.player.nickname}</span>
           {r.gained ? <span className={styles.plus}>+1</span> : null}
           <span className={styles.points_n}>{r.score}</span>
         </div>

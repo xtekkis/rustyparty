@@ -19,7 +19,9 @@
 .pipOut{background:var(--tile)}
 .judge{display:flex;align-items:center;gap:var(--space-2);font-weight:700;min-width:0;background:var(--panel);box-shadow:var(--shadow-hard);padding:7px 11px 7px var(--space-2);border-radius:var(--radius-tile)}
 .winner{display:flex;align-items:center;gap:14px;background:var(--panel);box-shadow:var(--shadow-hard);padding:10px var(--space-3);border-radius:var(--radius-tile)}
-.winnerName{display:block;font:400 30px/1.05 var(--world-display)}
+.winnerName{display:block;font:400 30px/1.05 var(--world-display);overflow-wrap:anywhere}
+/* added in rustyparty: long names wrap */
+.winner>div{min-width:0}
 .bagWrap{flex:1;display:grid;place-items:center;min-height:0;position:relative}
 .bag{position:relative;width:156px;height:132px}
 .bagBack,.bagFront{position:absolute;inset:0;width:100%;height:100%;display:block}

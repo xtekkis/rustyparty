@@ -8,7 +8,7 @@
 .center + .thumb{flex:none}
 @container (min-aspect-ratio:3/2) and (max-height:520px){
   .layout{flex-direction:row;gap:var(--space-4);align-items:stretch}
-  .glance{width:40%;justify-content:center;overflow-y:auto}
+  .glance{width:40%;justify-content:center;overflow-y:auto;overflow-x:hidden;padding:0 5px 5px 0}/* overflow-x and padding added in rustyparty */
   .glance.center{flex:none}
   .thumb{flex:1;gap:var(--space-2)}
   .center + .thumb{flex:1}
