@@ -2,6 +2,7 @@ use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
+mod db;
 mod error;
 mod games;
 mod protocol;
@@ -18,6 +19,9 @@ struct AppState {
 
 #[tokio::main]
 async fn main() {
+    // Settings from a .env file, if there is one. Real environment variables win
+    dotenvy::dotenv().ok();
+
     // Log level comes from RUST_LOG, with a default for local development
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -34,6 +38,9 @@ async fn main() {
         deck.prompts.len(),
         deck.answers.len()
     );
+
+    // Kept open while the server runs. Later steps load cards and save finished games with it
+    let _db = db::connect().await;
 
     let state = AppState::default();
 
