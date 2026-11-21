@@ -5,3 +5,24 @@ body,
   margin: 0;
   height: 100%;
 }
+
+/* On a computer or tablet the app stays phone-sized in the middle of the window.
+   Phones held sideways are less tall than this, so they keep their sideways layout */
+@media (min-width: 600px) and (min-height: 500px) {
+  body {
+    display: grid;
+    place-items: center;
+    /* The darkest shade of the world on screen, so the sides belong to it */
+    background: #06201a;
+  }
+  body:has([data-theme='bad-takes']) {
+    background: #24060c;
+  }
+  #root {
+    /* About a large phone. Banners are placed inside it, not across the window */
+    position: relative;
+    width: min(100%, 430px);
+    height: min(100%, 932px);
+    --screen-height: 100%;
+  }
+}
