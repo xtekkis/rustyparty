@@ -40,7 +40,10 @@ async fn main() {
     );
 
     // Kept open while the server runs. Later steps load cards and save finished games with it
-    let _db = db::connect().await;
+    let db = db::connect().await;
+    if let Some(pool) = &db {
+        db::migrate(pool).await;
+    }
 
     let state = AppState::default();
 

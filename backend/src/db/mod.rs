@@ -1,12 +1,16 @@
 use std::time::Duration;
 
 use sqlx::PgPool;
+use sqlx::migrate::{MigrateError, Migrator};
 use sqlx::postgres::PgPoolOptions;
 
 // How long a query waits for a free connection before giving up
 const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(3);
 // Few connections: only decks and finished games use the database
 const MAX_CONNECTIONS: u32 = 5;
+
+// Every file in backend/migrations, built into the server
+static MIGRATOR: Migrator = sqlx::migrate!();
 
 // The database from DATABASE_URL, or None without one.
 // Games never wait on it, so the server starts even when it's down
@@ -33,14 +37,20 @@ pub async fn connect() -> Option<PgPool> {
         }
     };
 
-    // Try once in the background, so the log says whether it works without delaying the start
-    let probe = pool.clone();
-    tokio::spawn(async move {
-        match probe.acquire().await {
-            Ok(_) => tracing::info!("Connected to the database"),
-            Err(error) => tracing::warn!("Can't reach the database, games still work: {error}"),
-        }
-    });
-
     Some(pool)
+}
+
+// Bring the tables up to date: each migration not yet run is run once, in order.
+// This is also the first time the server reaches the database, so it says whether that works
+pub async fn migrate(pool: &PgPool) {
+    match MIGRATOR.run(pool).await {
+        Ok(()) => tracing::info!(
+            "Connected to the database, tables up to date ({} migrations)",
+            MIGRATOR.iter().count()
+        ),
+        Err(MigrateError::Execute(sqlx::Error::PoolTimedOut)) => {
+            tracing::warn!("Can't reach the database, games still work")
+        }
+        Err(error) => tracing::error!("Database migration failed, games still work: {error}"),
+    }
 }
