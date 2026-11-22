@@ -45,8 +45,12 @@ pub async fn connect() -> Option<PgPool> {
 pub async fn migrate(pool: &PgPool) {
     match MIGRATOR.run(pool).await {
         Ok(()) => tracing::info!(
-            "Connected to the database, tables up to date ({} migrations)",
-            MIGRATOR.iter().count()
+            "Connected to the database, tables up to date (latest migration {})",
+            MIGRATOR
+                .iter()
+                .map(|migration| migration.version)
+                .max()
+                .unwrap_or(0)
         ),
         Err(MigrateError::Execute(sqlx::Error::PoolTimedOut)) => {
             tracing::warn!("Can't reach the database, games still work")
