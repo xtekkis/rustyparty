@@ -1,3 +1,5 @@
+pub mod seed;
+
 use std::time::Duration;
 
 use sqlx::PgPool;
@@ -41,9 +43,11 @@ pub async fn connect() -> Option<PgPool> {
 }
 
 // Bring the tables up to date: each migration not yet run is run once, in order.
-// This is also the first time the server reaches the database, so it says whether that works
-pub async fn migrate(pool: &PgPool) {
-    match MIGRATOR.run(pool).await {
+// This is also the first time the server reaches the database, so it says whether that works.
+// True when the tables are ready to use
+pub async fn migrate(pool: &PgPool) -> bool {
+    let result = MIGRATOR.run(pool).await;
+    match &result {
         Ok(()) => tracing::info!(
             "Connected to the database, tables up to date (latest migration {})",
             MIGRATOR
@@ -57,4 +61,5 @@ pub async fn migrate(pool: &PgPool) {
         }
         Err(error) => tracing::error!("Database migration failed, games still work: {error}"),
     }
+    result.is_ok()
 }

@@ -108,12 +108,19 @@ pub fn parse_deck(json: &str) -> Result<DeckFile, String> {
     if let Some(id) = first_duplicate(deck.answers.iter().map(|card| card.id)) {
         return Err(format!("two answers have id {id}"));
     }
+    // The database tells cards apart by their text
+    if let Some(text) = first_duplicate(deck.prompts.iter().map(|card| card.text.as_str())) {
+        return Err(format!("two prompts say \"{text}\""));
+    }
+    if let Some(text) = first_duplicate(deck.answers.iter().map(|card| card.text.as_str())) {
+        return Err(format!("two answers say \"{text}\""));
+    }
     Ok(deck)
 }
 
-fn first_duplicate(ids: impl Iterator<Item = CardId>) -> Option<CardId> {
+fn first_duplicate<T: Eq + std::hash::Hash + Copy>(items: impl Iterator<Item = T>) -> Option<T> {
     let mut seen = HashSet::new();
-    ids.into_iter().find(|&id| !seen.insert(id))
+    items.into_iter().find(|&item| !seen.insert(item))
 }
 
 #[cfg(test)]
@@ -230,6 +237,20 @@ mod tests {
         })
         .to_string();
         assert_eq!(parse_deck(&json).unwrap_err(), "two answers have id 3");
+    }
+
+    #[test]
+    fn duplicate_texts_are_refused() {
+        let json = json!({
+            "deck": "Test",
+            "prompts": [{ "id": 1, "text": "Love is ____.", "pick": 1 }],
+            "answers": [{ "id": 1, "text": "A wet sock." }, { "id": 2, "text": "A wet sock." }]
+        })
+        .to_string();
+        assert_eq!(
+            parse_deck(&json).unwrap_err(),
+            "two answers say \"A wet sock.\""
+        );
     }
 
     #[test]

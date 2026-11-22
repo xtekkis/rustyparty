@@ -41,8 +41,20 @@ async fn main() {
 
     // Kept open while the server runs. Later steps load cards and save finished games with it
     let db = db::connect().await;
-    if let Some(pool) = &db {
-        db::migrate(pool).await;
+    if let Some(pool) = &db
+        && db::migrate(pool).await
+    {
+        // The deck file is where cards are written. The database gets any new ones
+        let game_ids: Vec<&str> = games::GAMES.iter().map(|game| game.id).collect();
+        match db::seed::seed_deck(pool, &game_ids, "bad_takes", deck).await {
+            Ok(added) => tracing::info!(
+                "Deck {} saved: {} new prompts, {} new answers",
+                deck.name,
+                added.prompts,
+                added.answers
+            ),
+            Err(error) => tracing::error!("Saving deck {} failed: {error}", deck.name),
+        }
     }
 
     let state = AppState::default();
