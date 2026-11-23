@@ -47,11 +47,14 @@ async fn main() {
         // The deck file is where cards are written. The database gets any new ones
         let game_ids: Vec<&str> = games::GAMES.iter().map(|game| game.id).collect();
         match db::seed::seed_deck(pool, &game_ids, "bad_takes", deck).await {
-            Ok(added) => tracing::info!(
-                "Deck {} saved: {} new prompts, {} new answers",
+            Ok(synced) if synced.prompts.is_empty() && synced.answers.is_empty() => {
+                tracing::info!("Deck {} in the database is up to date", deck.name)
+            }
+            Ok(synced) => tracing::info!(
+                "Deck {} saved. Prompts: {:?}. Answers: {:?}",
                 deck.name,
-                added.prompts,
-                added.answers
+                synced.prompts,
+                synced.answers
             ),
             Err(error) => tracing::error!("Saving deck {} failed: {error}", deck.name),
         }
