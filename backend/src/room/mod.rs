@@ -6,6 +6,8 @@ pub mod code;
 mod in_game;
 // Joining, ready, settings, kick, ban and leaving
 mod lobby;
+// What a nickname may contain, and when two are the same
+mod nickname;
 // One player, and the token that gets them back in
 pub mod player;
 // The game vote
@@ -19,9 +21,10 @@ use tokio::time::Instant;
 
 use crate::games::{GAMES, Game, GameInfo};
 use crate::protocol::{LobbyPlayer, RoomPhase, RoomSettings, ServerMessage, VoteOption};
+pub use nickname::clean_nickname;
+use nickname::nickname_key;
 use player::{Player, generate_token};
 
-const NICKNAME_MAX_LENGTH: usize = 16;
 // The most any game allows, so a room can't be flooded with extra players
 pub const MAX_ROOM_PLAYERS: usize = 10;
 // How long a disconnected player keeps their seat
@@ -33,17 +36,6 @@ const POINTS_TO_WIN_MAX: u8 = 15;
 
 pub fn is_valid_points_to_win(points: u8) -> bool {
     (POINTS_TO_WIN_MIN..=POINTS_TO_WIN_MAX).contains(&points)
-}
-
-// Trim spaces, then check the nickname is 1 to 16 characters
-pub fn clean_nickname(nickname: &str) -> Option<String> {
-    let nickname = nickname.trim();
-    let length = nickname.chars().count();
-    if (1..=NICKNAME_MAX_LENGTH).contains(&length) {
-        Some(nickname.to_string())
-    } else {
-        None
-    }
 }
 
 // Seconds until a moment, rounded up so half a second left still shows 1
@@ -117,12 +109,12 @@ impl Room {
         }
     }
 
-    // Nicknames are unique per room, ignoring upper and lower case
+    // Nicknames are unique per room, ignoring case and the joiners inside emoji
     pub fn has_nickname(&self, nickname: &str) -> bool {
-        let nickname = nickname.to_lowercase();
+        let key = nickname_key(nickname);
         self.players
             .iter()
-            .any(|player| player.nickname.to_lowercase() == nickname)
+            .any(|player| nickname_key(&player.nickname) == key)
     }
 
     // Add a player and return them

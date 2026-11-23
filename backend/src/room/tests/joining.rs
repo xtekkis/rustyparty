@@ -116,6 +116,59 @@ fn nickname_length_counts_letters_not_bytes() {
 }
 
 #[test]
+fn hidden_characters_are_taken_out() {
+    // A zero-width space, a text direction override, a soft hyphen and a byte order mark
+    assert_eq!(clean_nickname("Al\u{200B}ex"), Some("Alex".to_string()));
+    assert_eq!(clean_nickname("\u{202E}xelA"), Some("xelA".to_string()));
+    assert_eq!(
+        clean_nickname("Al\u{AD}ex\u{FEFF}"),
+        Some("Alex".to_string())
+    );
+    assert_eq!(clean_nickname("Al\u{7}ex"), Some("Alex".to_string()));
+}
+
+#[test]
+fn a_nickname_must_show_something() {
+    assert_eq!(clean_nickname("\u{200B}\u{200B}"), None);
+    // A Hangul filler looks like a blank letter
+    assert_eq!(clean_nickname("\u{3164}"), None);
+    assert_eq!(clean_nickname("\u{200D}\u{FE0F}"), None);
+}
+
+#[test]
+fn every_kind_of_space_becomes_one_plain_space() {
+    assert_eq!(
+        clean_nickname("Big\u{A0}\u{3000} \tSam"),
+        Some("Big Sam".to_string())
+    );
+}
+
+#[test]
+fn emoji_stay_whole() {
+    let family = "👨\u{200D}👩\u{200D}👧";
+    assert_eq!(clean_nickname(family), Some(family.to_string()));
+    assert_eq!(clean_nickname("❤\u{FE0F}"), Some("❤\u{FE0F}".to_string()));
+}
+
+#[test]
+fn joiners_dont_make_a_different_nickname() {
+    let mut room = Room::new("KXTP".to_string());
+    room.add_player("Alex".to_string(), None, test_sender());
+    assert!(room.has_nickname("Alex\u{200D}"));
+    assert!(room.has_nickname("A\u{FE0F}lex"));
+}
+
+#[tokio::test]
+async fn lookalike_nickname_is_refused() {
+    let (room, _rooms) = spawn_room();
+    join(&room, "Alex", None).await;
+    let (player_id, mut messages) = join(&room, "Al\u{200B}ex", None).await;
+
+    assert_eq!(player_id, None);
+    assert_eq!(error_code(messages.recv().await), "nickname_taken");
+}
+
+#[test]
 fn duplicate_nickname_ignores_case() {
     let mut room = Room::new("KXTP".to_string());
     room.add_player("Alex".to_string(), None, test_sender());
