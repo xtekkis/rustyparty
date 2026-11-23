@@ -1,6 +1,4 @@
 pub mod seed;
-#[cfg(test)]
-mod tests;
 
 use std::time::Duration;
 
@@ -65,3 +63,6 @@ pub async fn migrate(pool: &PgPool) -> bool {
     }
     result.is_ok()
 }
+
+#[cfg(test)]
+mod tests;

@@ -1,6 +1,7 @@
-// Database tests. Each gets a fresh, empty database with every migration run, dropped afterwards.
-// They need PostgreSQL, so plain `cargo test` skips them. With the database up, run them with:
-// cargo test -- --ignored
+// Database tests. Each gets a fresh, empty database with every migration run. It's dropped
+// when the test passes, and kept for a look when it fails.
+// They need PostgreSQL running and DATABASE_URL set (copy .env.example to .env), so plain
+// `cargo test` skips them. Run them with: cargo test -- --ignored
 use sqlx::PgPool;
 
 use crate::games::bad_takes::deck::{DeckFile, parse_deck};
@@ -23,14 +24,35 @@ pub fn deck(prompts: &[&str], answers: &[&str]) -> DeckFile {
     parse_deck(&json.to_string()).unwrap()
 }
 
-// Every card in the database: kind, id, text, and whether it's dealt
-pub async fn cards(pool: &PgPool) -> Vec<(String, i64, String, bool)> {
+// One card row as stored, prompts and answers alike
+#[derive(Debug, PartialEq, sqlx::FromRow)]
+pub struct Card {
+    pub kind: String,
+    pub id: i64,
+    pub deck_id: i64,
+    pub text: String,
+    // None for answers
+    pub pick: Option<i16>,
+    pub is_active: bool,
+}
+
+// Every card in the database, every column
+pub async fn cards(pool: &PgPool) -> Vec<Card> {
     sqlx::query_as(
-        "SELECT 'prompt', id, text, is_active FROM prompts
-         UNION ALL SELECT 'answer', id, text, is_active FROM answers
-         ORDER BY 1, 2",
+        "SELECT 'prompt' AS kind, id, deck_id, text, pick, is_active FROM prompts
+         UNION ALL SELECT 'answer', id, deck_id, text, NULL, is_active FROM answers
+         ORDER BY kind, id",
     )
     .fetch_all(pool)
     .await
     .unwrap()
+}
+
+// The card with this text
+pub async fn card(pool: &PgPool, text: &str) -> Card {
+    cards(pool)
+        .await
+        .into_iter()
+        .find(|card| card.text == text)
+        .unwrap_or_else(|| panic!("no card says {text:?}"))
 }
