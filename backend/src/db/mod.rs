@@ -1,4 +1,6 @@
 pub mod seed;
+#[cfg(test)]
+mod tests;
 
 use std::time::Duration;
 
