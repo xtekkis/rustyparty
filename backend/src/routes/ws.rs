@@ -1,9 +1,11 @@
 use axum::{
     extract::{
-        State,
+        Request, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
-    response::Response,
+    http::{StatusCode, header::ORIGIN},
+    middleware::Next,
+    response::{IntoResponse, Response},
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -14,6 +16,18 @@ use crate::room::actor::{Connection, RoomCommand, RoomHandle};
 // The biggest real message, a join, is well under 1 KB. Without a limit one message
 // could be 64 MB, all of it read into memory before it's refused
 const MAX_MESSAGE_SIZE: usize = 16 * 1024;
+
+// Browsers say which website opened the connection, and other websites are refused.
+// Apps and scripts send no Origin and are let through: this only stops other websites
+pub async fn check_origin(State(state): State<AppState>, request: Request, next: Next) -> Response {
+    if let Some(origin) = request.headers().get(ORIGIN)
+        && !state.origins.allows(origin)
+    {
+        tracing::warn!("Refused a WebSocket opened by {origin:?}");
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    next.run(request).await
+}
 
 // Upgrade the HTTP request to a WebSocket
 pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {

@@ -4,16 +4,19 @@ use tracing_subscriber::EnvFilter;
 
 mod error;
 mod games;
+mod origins;
 mod protocol;
 mod room;
 mod routes;
 
+use origins::AllowedOrigins;
 use room::actor::RoomMap;
 
-// Shared by all requests: how to reach each room, by code
+// Shared by all requests: how to reach each room, by code, and which websites may call
 #[derive(Clone, Default)]
 struct AppState {
     rooms: RoomMap,
+    origins: AllowedOrigins,
 }
 
 #[tokio::main]
@@ -35,7 +38,17 @@ async fn main() {
         deck.answers.len()
     );
 
-    let state = AppState::default();
+    let origins = AllowedOrigins::from_env();
+    match &origins {
+        AllowedOrigins::Any => tracing::warn!(
+            "ALLOWED_ORIGINS is not set, so any website may call this server. Set it when deployed"
+        ),
+        AllowedOrigins::Only(list) => tracing::info!("Only these websites may call: {list:?}"),
+    }
+    let state = AppState {
+        origins,
+        ..AppState::default()
+    };
 
     let app = routes::router(state).layer(TraceLayer::new_for_http());
 
