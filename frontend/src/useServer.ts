@@ -79,9 +79,13 @@ export function useServer(openedFor: string | null, onSeatLost: (message: string
 
     ws.onopen = () => {
       setStatus('open')
-      retries.current = 0
       const seat = seatNow.current
-      if (!seat) return
+      // Without a seat, being connected is all there is to it. With one, the waits between
+      // tries only start over once the seat is back, so a refused rejoin waits longer each time
+      if (!seat) {
+        retries.current = 0
+        return
+      }
       // With the token the server ignores the name and avatar
       joining.current = seat.room
       rejoining.current = true
@@ -108,8 +112,16 @@ export function useServer(openedFor: string | null, onSeatLost: (message: string
         changeSeat(next)
         joining.current = null
         rejoining.current = false
+        retries.current = 0
       } else if (message.type === 'error' && joining.current) {
         joining.current = null
+        if (rejoining.current && message.code === 'slow_down') {
+          // The server is busy with this address, not saying the seat is gone: keep it and
+          // try again, the usual way after a drop
+          rejoining.current = false
+          ws.close()
+          return
+        }
         if (rejoining.current) {
           // The seat is gone. Start over at home, without the old room's state
           rejoining.current = false

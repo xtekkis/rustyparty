@@ -16,6 +16,9 @@ const COMMAND_QUEUE_SIZE: usize = 64;
 
 // A room with nobody connected for this long deletes itself
 pub(super) const EMPTY_ROOM_LIFETIME: Duration = Duration::from_secs(5 * 60);
+// Sooner if nobody ever joined: enough for the host to pick a name, and rooms made just to
+// fill the server don't last
+pub(super) const UNJOINED_ROOM_LIFETIME: Duration = Duration::from_secs(2 * 60);
 
 // All rooms by code, shared by the whole server
 pub type RoomMap = Arc<Mutex<HashMap<String, RoomHandle>>>;
@@ -243,7 +246,12 @@ impl Room {
 
         let since = Instant::now();
         self.empty_since = Some(since);
-        remind(me, EMPTY_ROOM_LIFETIME, RoomCommand::EmptyTimeout { since });
+        let lifetime = if self.anyone_joined() {
+            EMPTY_ROOM_LIFETIME
+        } else {
+            UNJOINED_ROOM_LIFETIME
+        };
+        remind(me, lifetime, RoomCommand::EmptyTimeout { since });
     }
 
     pub(super) fn send_to_player(&self, player_id: u32, message: ServerMessage) {

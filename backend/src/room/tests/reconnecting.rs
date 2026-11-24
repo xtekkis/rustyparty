@@ -65,10 +65,10 @@ async fn disconnected_player_is_removed_after_grace() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn empty_room_deletes_itself_after_5_minutes() {
+async fn a_room_nobody_joined_deletes_itself_after_2_minutes() {
     let (room, rooms) = spawn_room();
 
-    tokio::time::sleep(EMPTY_ROOM_LIFETIME - Duration::from_secs(1)).await;
+    tokio::time::sleep(UNJOINED_ROOM_LIFETIME - Duration::from_secs(1)).await;
     assert!(rooms.lock().unwrap().contains_key("KXTP"));
 
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -77,6 +77,23 @@ async fn empty_room_deletes_itself_after_5_minutes() {
         !room.send(RoomCommand::Leave { player_id: 1 }).await,
         "the task has ended"
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_room_people_left_deletes_itself_after_5_minutes() {
+    let (room, rooms) = spawn_room();
+    // The host joins a moment after making the room
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let (alex, _messages) = join(&room, "Alex", None).await;
+    room.send(RoomCommand::Leave {
+        player_id: alex.unwrap(),
+    })
+    .await;
+
+    tokio::time::sleep(EMPTY_ROOM_LIFETIME - Duration::from_secs(1)).await;
+    assert!(rooms.lock().unwrap().contains_key("KXTP"));
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(!rooms.lock().unwrap().contains_key("KXTP"));
 }
 
 #[tokio::test(start_paused = true)]
@@ -91,9 +108,9 @@ async fn room_with_a_connected_player_is_kept() {
 #[tokio::test(start_paused = true)]
 async fn someone_joining_stops_the_countdown() {
     let (room, rooms) = spawn_room();
-    tokio::time::sleep(Duration::from_secs(200)).await;
+    tokio::time::sleep(Duration::from_secs(100)).await;
 
-    // Alex is there from 200s to 300s, then the room is empty again
+    // Alex is there from 100s to 200s, then the room is empty again
     let (alex, _messages) = join(&room, "Alex", None).await;
     tokio::time::sleep(Duration::from_secs(100)).await;
     room.send(RoomCommand::Leave {
@@ -101,7 +118,7 @@ async fn someone_joining_stops_the_countdown() {
     })
     .await;
 
-    // The first countdown would have ended at 300s, the new one ends at 600s
+    // The first countdown would have ended at 120s, the new one ends at 500s
     tokio::time::sleep(Duration::from_secs(250)).await;
     assert!(rooms.lock().unwrap().contains_key("KXTP"));
     tokio::time::sleep(Duration::from_secs(60)).await;

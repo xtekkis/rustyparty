@@ -1,22 +1,31 @@
+use std::net::SocketAddr;
+use std::sync::Arc;
+
 use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
+mod client_ip;
 mod error;
 mod games;
+mod limits;
 mod origins;
 mod protocol;
 mod room;
 mod routes;
 
+use limits::Limits;
 use origins::AllowedOrigins;
 use room::actor::RoomMap;
 
-// Shared by all requests: how to reach each room, by code, and which websites may call
+// Shared by all requests: how to reach each room by code, which websites may call,
+// how often each address may do things, and whether a proxy says who's calling
 #[derive(Clone, Default)]
 struct AppState {
     rooms: RoomMap,
     origins: AllowedOrigins,
+    limits: Arc<Limits>,
+    behind_proxy: bool,
 }
 
 #[tokio::main]
@@ -45,8 +54,20 @@ async fn main() {
         ),
         AllowedOrigins::Only(list) => tracing::info!("Only these websites may call: {list:?}"),
     }
+    // Render's proxy says who's calling in X-Forwarded-For. Without a proxy, anyone could
+    // write that header, so it's only read when this is set
+    let behind_proxy = match std::env::var("BEHIND_PROXY").as_deref() {
+        Ok("true") => true,
+        Ok("false") | Err(_) => false,
+        Ok(other) => panic!("BEHIND_PROXY must be true or false, not {other:?}"),
+    };
+    if behind_proxy {
+        tracing::info!("Behind a proxy: player addresses come from X-Forwarded-For");
+    }
+
     let state = AppState {
         origins,
+        behind_proxy,
         ..AppState::default()
     };
 
@@ -64,5 +85,7 @@ async fn main() {
     let listener = TcpListener::bind(("0.0.0.0", port)).await.unwrap();
     tracing::info!("Listening on {}", listener.local_addr().unwrap());
 
+    // Each connection's own address, for the limits when there's no proxy
+    let app = app.into_make_service_with_connect_info::<SocketAddr>();
     axum::serve(listener, app).await.unwrap();
 }

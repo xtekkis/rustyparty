@@ -124,6 +124,9 @@ pub enum ServerMessage {
     Replaced,
     Kicked,
     Banned,
+    // This connection sent too much too fast and some of it was dropped. Not an answer to
+    // anything, so it can't be mistaken for one
+    SlowDown,
 }
 
 impl ServerMessage {

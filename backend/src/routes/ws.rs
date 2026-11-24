@@ -3,13 +3,21 @@ use axum::{
         Request, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
-    http::{StatusCode, header::ORIGIN},
+    http::{
+        StatusCode,
+        header::{ORIGIN, RETRY_AFTER},
+    },
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use std::net::IpAddr;
+
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::Instant;
 
 use crate::AppState;
+use crate::client_ip::{ClientIp, client_ip};
+use crate::limits::{Bucket, MESSAGES};
 use crate::protocol::{ClientMessage, ServerMessage};
 use crate::room::actor::{Connection, RoomCommand, RoomHandle};
 
@@ -17,27 +25,43 @@ use crate::room::actor::{Connection, RoomCommand, RoomHandle};
 // could be 64 MB, all of it read into memory before it's refused
 const MAX_MESSAGE_SIZE: usize = 16 * 1024;
 
-// Browsers say which website opened the connection, and other websites are refused.
-// Apps and scripts send no Origin and are let through: this only stops other websites
-pub async fn check_origin(State(state): State<AppState>, request: Request, next: Next) -> Response {
+// Checked before a connection is opened.
+// Browsers say which website opened it, and other websites are refused. Apps and scripts
+// send no Origin and are let through: this only stops other websites.
+// Each address may only open so many connections
+pub async fn check_websocket(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
     if let Some(origin) = request.headers().get(ORIGIN)
         && !state.origins.allows(origin)
     {
         tracing::warn!("Refused a WebSocket opened by {origin:?}");
         return StatusCode::FORBIDDEN.into_response();
     }
+    let ip = client_ip(request.headers(), request.extensions(), state.behind_proxy);
+    if !state.limits.websockets.allow(ip) {
+        tracing::warn!("Too many WebSockets opened from one address");
+        let retry_after = state.limits.websockets.rate().retry_after();
+        return (StatusCode::TOO_MANY_REQUESTS, [(RETRY_AFTER, retry_after)]).into_response();
+    }
     next.run(request).await
 }
 
 // Upgrade the HTTP request to a WebSocket
-pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
+pub async fn ws_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
+) -> Response {
     ws.max_message_size(MAX_MESSAGE_SIZE)
         .max_frame_size(MAX_MESSAGE_SIZE)
-        .on_upgrade(move |socket| handle_socket(socket, state))
+        .on_upgrade(move |socket| handle_socket(socket, state, ip))
 }
 
 // One player's connection: read from the phone and forward messages from their room
-async fn handle_socket(mut socket: WebSocket, state: AppState) {
+async fn handle_socket(mut socket: WebSocket, state: AppState, ip: IpAddr) {
     tracing::debug!("WebSocket connected");
 
     // The room sends to this player through the sender
@@ -46,18 +70,37 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
     // The room and player id, once this connection has joined
     let mut joined: Option<(RoomHandle, u32)> = None;
 
+    // Messages beyond the limit are dropped. The phone hears about it once, and again only
+    // after the connection has calmed down enough for its bucket to fill up
+    let mut messages = Bucket::full(MESSAGES, Instant::now());
+    let mut warned = false;
+
     loop {
         tokio::select! {
             incoming = socket.recv() => {
                 let Some(Ok(message)) = incoming else {
                     break;
                 };
+                // Every frame counts, pings and binary ones too
+                let now = Instant::now();
+                if messages.is_full(MESSAGES, now) {
+                    warned = false;
+                }
+                if !matches!(message, Message::Close(_)) && !messages.take(MESSAGES, now) {
+                    if !warned {
+                        warned = true;
+                        tracing::warn!("Dropping messages from a connection sending too fast");
+                        if send_message(&mut socket, &ServerMessage::SlowDown).await.is_err() {
+                            break;
+                        }
+                    }
+                    continue;
+                }
                 // Only text messages carry JSON; pings and closing are handled automatically
                 let Message::Text(text) = message else {
                     continue;
                 };
-
-                let reply = handle_text(&text, &state, &mut joined, &sender).await;
+                let reply = handle_text(&text, &state, ip, &mut joined, &sender).await;
                 if let Some(reply) = reply
                     && send_message(&mut socket, &reply).await.is_err()
                 {
@@ -97,6 +140,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
 async fn handle_text(
     text: &str,
     state: &AppState,
+    ip: IpAddr,
     joined: &mut Option<(RoomHandle, u32)>,
     sender: &Connection,
 ) -> Option<ServerMessage> {
@@ -118,7 +162,19 @@ async fn handle_text(
             nickname,
             avatar,
             token,
-        } => join(room, nickname, avatar, token, state, joined, sender).await,
+        } => {
+            let reply = join(room, nickname, avatar, token, state, joined, sender).await;
+            // Joining with a code that isn't a room is a guess too, so it uses a try like a
+            // lookup. Joining a real room, or getting a seat back, is never counted or refused
+            let not_a_room = matches!(&reply, Some(ServerMessage::Error { code, .. }) if code == "room_not_found");
+            if not_a_room && !state.limits.room_lookups.allow(ip) {
+                return Some(ServerMessage::error(
+                    "slow_down",
+                    "Too many tries, wait a moment and try again",
+                ));
+            }
+            reply
+        }
         ClientMessage::Leave => {
             // take() empties joined, so this connection can join a room again
             let Some((room, player_id)) = joined.take() else {

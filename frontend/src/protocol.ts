@@ -68,6 +68,8 @@ export type ServerMessage =
   | { type: 'replaced' }
   | { type: 'kicked' }
   | { type: 'banned' }
+  // Some of this connection's messages were dropped for coming too fast. Not an answer to anything
+  | { type: 'slow_down' }
 
 // POST /rooms
 export interface CreateRoomResponse {

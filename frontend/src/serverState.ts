@@ -88,6 +88,9 @@ export function applyMessage(state: ServerState, message: ServerMessage, at = 0)
     case 'banned':
     case 'replaced':
       return { ...state, removed: message.type }
+    case 'slow_down':
+      // Only a script sends fast enough to see this, so there's nothing to show
+      return state
   }
 }
 

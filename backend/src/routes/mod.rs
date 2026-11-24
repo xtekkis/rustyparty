@@ -13,7 +13,7 @@ pub fn router(state: AppState) -> Router {
     let cors = state.origins.cors();
     let ws = get(ws::ws_handler).route_layer(middleware::from_fn_with_state(
         state.clone(),
-        ws::check_origin,
+        ws::check_websocket,
     ));
     Router::new()
         .route("/health", get(http::health))
