@@ -108,7 +108,7 @@ pub fn parse_deck(json: &str) -> Result<DeckFile, String> {
     if let Some(id) = first_duplicate(deck.answers.iter().map(|card| card.id)) {
         return Err(format!("two answers have id {id}"));
     }
-    // The database tells cards apart by their text
+    // Two cards with the same text would be the same card twice
     if let Some(text) = first_duplicate(deck.prompts.iter().map(|card| card.text.as_str())) {
         return Err(format!("two prompts say \"{text}\""));
     }
