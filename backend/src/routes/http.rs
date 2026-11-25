@@ -73,17 +73,21 @@ pub async fn get_room(
     ClientIp(ip): ClientIp,
     Path(code): Path<String>,
 ) -> Result<Json<RoomInfo>, AppError> {
+    // Every lookup uses a try and a real room gives it back. So guessing is slowed, a party
+    // checking its own link costs nothing, and an address out of tries is refused for every
+    // code alike, so it can't tell which ones exist
+    if !state.limits.room_lookups.allow(ip) {
+        let retry_after = state.limits.room_lookups.rate().retry_after();
+        return Err(AppError::TooManyRequests { retry_after });
+    }
+
     // Accept lowercase codes too
     let code = code.to_uppercase();
     let room = state.rooms.lock().unwrap().get(&code).cloned();
     let Some(room) = room else {
-        // Slows down anyone guessing codes. A real room is never refused
-        if !state.limits.room_lookups.allow(ip) {
-            let retry_after = state.limits.room_lookups.rate().retry_after();
-            return Err(AppError::TooManyRequests { retry_after });
-        }
         return Err(AppError::RoomNotFound);
     };
+    state.limits.room_lookups.give_back(ip);
 
     let (reply, players) = oneshot::channel();
     room.send(RoomCommand::PlayerCount { reply }).await;

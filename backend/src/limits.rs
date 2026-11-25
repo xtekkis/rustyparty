@@ -24,10 +24,11 @@ impl Rate {
 }
 
 // Sized for a party of 10 phones on one Wi-Fi, which all share one address.
-// A host makes a room now and then
-pub const CREATE_ROOMS: Rate = Rate::new(5, Duration::from_secs(20));
-// Codes that turn out not to be a room, by link or by joining. Real rooms are never counted or
-// refused, so only guessing is slowed: about 1,800 wrong codes an hour
+// A host makes a room now and then. Few rooms per address also means it takes many addresses
+// to fill the server
+pub const CREATE_ROOMS: Rate = Rate::new(3, Duration::from_secs(60));
+// Looking up a code, by link or by joining. A real room gives its try back, so a party costs
+// nothing and only guessing is slowed: about 1,800 wrong codes an hour
 pub const ROOM_LOOKUPS: Rate = Rate::new(30, Duration::from_secs(2));
 // Phones reconnect each time they come back to the app
 pub const WEBSOCKETS: Rate = Rate::new(30, Duration::from_secs(2));
@@ -38,9 +39,10 @@ pub const MESSAGES: Rate = Rate::new(20, Duration::from_millis(100));
 // at most once every PRUNE_EVERY so a crowd of addresses can't make every request slow
 const PRUNE_AT: usize = 10_000;
 const PRUNE_EVERY: Duration = Duration::from_secs(10);
-// More than this many still counting means a flood from many addresses. Starting over
-// keeps memory in check, at the cost of a fresh bucket for everyone
+// More than this many still counting means a flood from many addresses. Newcomers then share
+// one bucket, so memory stays in check and nobody's count is wiped
 const MAX_TRACKED: usize = 100_000;
+const OVERFLOW: IpAddr = IpAddr::V6(Ipv6Addr::UNSPECIFIED);
 
 // A bucket of tries that refills over time. Each try takes one
 #[derive(Debug)]
@@ -77,6 +79,11 @@ impl Bucket {
     pub fn is_full(&self, rate: Rate, now: Instant) -> bool {
         self.tokens_at(rate, now) >= f64::from(rate.burst)
     }
+
+    fn give_back(&mut self, rate: Rate, now: Instant) {
+        self.tokens = (self.tokens_at(rate, now) + 1.0).min(f64::from(rate.burst));
+        self.updated = now;
+    }
 }
 
 // One bucket per address, or per block of IPv6 addresses
@@ -110,13 +117,29 @@ impl Limiter {
 
     // Uses a try if one is left, in one step, so requests at the same moment can't share a try
     pub fn allow(&self, ip: IpAddr) -> bool {
+        self.with_bucket(ip, |bucket, rate, now| bucket.take(rate, now))
+    }
+
+    // Hands back a try that turned out not to count
+    pub fn give_back(&self, ip: IpAddr) {
+        self.with_bucket(ip, |bucket, rate, now| {
+            bucket.give_back(rate, now);
+            true
+        });
+    }
+
+    fn with_bucket(
+        &self,
+        ip: IpAddr,
+        use_it: impl FnOnce(&mut Bucket, Rate, Instant) -> bool,
+    ) -> bool {
         // This computer: development, Vite's proxy and test scripts. Behind Render's proxy a
         // player's address is always a public one, so this never matches there
         if ip.is_loopback() {
             return true;
         }
         let now = Instant::now();
-        let key = limit_key(ip, self.v6_block);
+        let mut key = limit_key(ip, self.v6_block);
         let mut buckets = self.buckets.lock().unwrap();
         let Buckets {
             by_address,
@@ -127,18 +150,14 @@ impl Limiter {
             *last_pruned = now;
         }
         if by_address.len() >= MAX_TRACKED && !by_address.contains_key(&key) {
-            tracing::warn!(
-                "Over {MAX_TRACKED} addresses counted at once, starting the counts over"
-            );
-            by_address.clear();
+            key = OVERFLOW;
         }
-        by_address
+        let bucket = by_address
             .entry(key)
-            .or_insert_with(|| Bucket::full(self.rate, now))
-            .take(self.rate, now)
+            .or_insert_with(|| Bucket::full(self.rate, now));
+        use_it(bucket, self.rate, now)
     }
 }
-
 // Addresses in one IPv6 block share a bucket: one home usually gets a whole /64, and one
 // customer often a /56 or /48
 fn limit_key(ip: IpAddr, v6_block: u32) -> IpAddr {
@@ -161,9 +180,10 @@ pub struct Limits {
 impl Default for Limits {
     fn default() -> Self {
         Limits {
-            // A wider block for making rooms, so one customer can't fill the server
+            // A wider block for making rooms and looking them up, so one customer with a whole
+            // block of addresses can't fill the server or guess codes faster
             create_rooms: Limiter::new(CREATE_ROOMS, 48),
-            room_lookups: Limiter::new(ROOM_LOOKUPS, 64),
+            room_lookups: Limiter::new(ROOM_LOOKUPS, 48),
             websockets: Limiter::new(WEBSOCKETS, 64),
         }
     }
@@ -264,14 +284,38 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_flood_of_addresses_starts_the_counts_over() {
+    async fn newcomers_share_one_bucket_when_too_many_are_counted() {
         let limiter = Limiter::new(RATE, 64);
+        let first = many(1).next().unwrap();
         many(MAX_TRACKED).for_each(|ip| {
             limiter.allow(ip);
         });
-        assert_eq!(tracked(&limiter), MAX_TRACKED);
-        limiter.allow(HOME);
-        assert_eq!(tracked(&limiter), 1);
+        // Nobody's count is wiped: the first address still has its two tries, no more
+        assert!(limiter.allow(first) && limiter.allow(first));
+        assert!(!limiter.allow(first));
+
+        // Two newcomers share the overflow bucket's three tries
+        assert!(limiter.allow(HOME) && limiter.allow(OTHER) && limiter.allow(HOME));
+        assert!(!limiter.allow(OTHER));
+        assert_eq!(tracked(&limiter), MAX_TRACKED + 1);
+    }
+
+    #[tokio::test]
+    async fn a_try_given_back_can_be_used_again() {
+        let limiter = Limiter::new(RATE, 64);
+        assert!((0..3).all(|_| limiter.allow(HOME)));
+        assert!(!limiter.allow(HOME));
+        limiter.give_back(HOME);
+        assert!(limiter.allow(HOME));
+        assert!(!limiter.allow(HOME));
+    }
+
+    #[tokio::test]
+    async fn giving_back_never_overfills() {
+        let limiter = Limiter::new(RATE, 64);
+        (0..10).for_each(|_| limiter.give_back(HOME));
+        assert!((0..3).all(|_| limiter.allow(HOME)));
+        assert!(!limiter.allow(HOME));
     }
 
     #[tokio::test]
@@ -291,7 +335,7 @@ mod tests {
 
     #[test]
     fn retry_after_is_whole_seconds() {
-        assert_eq!(CREATE_ROOMS.retry_after(), 20);
+        assert_eq!(CREATE_ROOMS.retry_after(), 60);
         assert_eq!(MESSAGES.retry_after(), 1);
     }
 }

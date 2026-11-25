@@ -163,15 +163,18 @@ async fn handle_text(
             avatar,
             token,
         } => {
-            let reply = join(room, nickname, avatar, token, state, joined, sender).await;
-            // Joining with a code that isn't a room is a guess too, so it uses a try like a
-            // lookup. Joining a real room, or getting a seat back, is never counted or refused
-            let not_a_room = matches!(&reply, Some(ServerMessage::Error { code, .. }) if code == "room_not_found");
-            if not_a_room && !state.limits.room_lookups.allow(ip) {
+            // A join uses a try like a lookup, and a real room gives it back. An address out
+            // of tries is refused for every code alike, so it can't tell which ones exist
+            if !state.limits.room_lookups.allow(ip) {
                 return Some(ServerMessage::error(
                     "slow_down",
                     "Too many tries, wait a moment and try again",
                 ));
+            }
+            let reply = join(room, nickname, avatar, token, state, joined, sender).await;
+            let not_a_room = matches!(&reply, Some(ServerMessage::Error { code, .. }) if code == "room_not_found");
+            if !not_a_room {
+                state.limits.room_lookups.give_back(ip);
             }
             reply
         }

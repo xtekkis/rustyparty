@@ -109,11 +109,6 @@ impl Room {
         }
     }
 
-    // Whether anyone has ever had a seat here. Ids start at 1 and only go up
-    pub fn anyone_joined(&self) -> bool {
-        self.next_player_id > 1
-    }
-
     // Nicknames are unique per room, ignoring case and the joiners inside emoji
     pub fn has_nickname(&self, nickname: &str) -> bool {
         let key = nickname_key(nickname);

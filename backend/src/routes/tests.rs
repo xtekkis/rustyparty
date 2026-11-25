@@ -114,7 +114,7 @@ async fn send(app: &Router, method: &str, path: &str, address: &str) -> StatusCo
 #[tokio::test(start_paused = true)]
 async fn creating_rooms_is_limited_per_address() {
     let app = behind_proxy();
-    for _ in 0..5 {
+    for _ in 0..3 {
         assert_eq!(
             send(&app, "POST", "/rooms", "203.0.113.7").await,
             StatusCode::CREATED
@@ -134,7 +134,7 @@ async fn creating_rooms_is_limited_per_address() {
 #[tokio::test(start_paused = true)]
 async fn a_fake_address_doesnt_get_round_the_limit() {
     let app = behind_proxy();
-    for n in 0..5 {
+    for n in 0..3 {
         // The cheater writes a new address each time, but the proxy's entry is last
         let forwarded = format!("1.2.3.{n}, 203.0.113.7");
         assert_eq!(
@@ -200,7 +200,7 @@ async fn looking_up_a_real_room_never_counts() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_real_room_is_never_refused_even_after_guessing() {
+async fn an_address_out_of_tries_cant_tell_real_rooms_apart() {
     let app = behind_proxy();
     let request = Request::post("/rooms")
         .header("x-forwarded-for", "203.0.113.7")
@@ -228,9 +228,13 @@ async fn a_real_room_is_never_refused_even_after_guessing() {
     assert_eq!(refused.status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(refused.headers()[header::RETRY_AFTER], "2");
 
-    // The real room still answers
+    // A real room is refused too, the same way, so the answer gives nothing away
+    let request = Request::get(path.as_str())
+        .header("x-forwarded-for", "203.0.113.7")
+        .body(Body::empty())
+        .unwrap();
     assert_eq!(
-        send(&app, "GET", &path, "203.0.113.7").await,
-        StatusCode::OK
+        app.clone().oneshot(request).await.unwrap().status(),
+        StatusCode::TOO_MANY_REQUESTS
     );
 }

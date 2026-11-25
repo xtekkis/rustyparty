@@ -105,7 +105,11 @@ export function useServer(openedFor: string | null, onSeatLost: (message: string
     }
 
     ws.onmessage = (event) => {
-      const message = JSON.parse(event.data) as ServerMessage
+      let message = JSON.parse(event.data) as ServerMessage
+      // A join dropped for coming too fast gets no answer of its own, so this stands in for it
+      if (message.type === 'slow_down' && joining.current) {
+        message = { type: 'error', code: 'slow_down', message: 'Too many tries, wait a moment and try again' }
+      }
       if (message.type === 'welcome' && joining.current) {
         const next = { room: joining.current, token: message.token }
         saveSession(next)
@@ -128,6 +132,7 @@ export function useServer(openedFor: string | null, onSeatLost: (message: string
           // A ban stays saved, so joining that room again is still refused
           if (message.code !== 'banned_from_room') clearSession()
           changeSeat(null)
+          retries.current = 0
           dispatch('forget')
           seatLost.current(lostMessage(message))
           return
