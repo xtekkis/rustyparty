@@ -25,7 +25,7 @@ impl FromRequestParts<AppState> for ClientIp {
 
 // The connection's own address, or behind a proxy like Render's, the one the proxy saw
 pub fn client_ip(headers: &HeaderMap, extensions: &Extensions, behind_proxy: bool) -> IpAddr {
-    if behind_proxy && let Some(ip) = forwarded_ip(headers) {
+    if behind_proxy && let Some(ip) = cloudflare_ip(headers).or_else(|| forwarded_ip(headers)) {
         return ip;
     }
     let through_proxy = headers.contains_key("x-forwarded-for");
@@ -44,8 +44,19 @@ pub fn client_ip(headers: &HeaderMap, extensions: &Extensions, behind_proxy: boo
     peer
 }
 
-// The proxy adds the address it saw to the end of X-Forwarded-For, after anything the visitor
-// wrote themselves, then its own internal hops. So the rightmost public address is the real one
+// Render sits behind Cloudflare, which puts the visitor's address in CF-Connecting-IP and
+// overwrites any the visitor sent, so it can't be faked. Checked on Render on 2026-11-25:
+// X-Forwarded-For held the visitor, then a Cloudflare server, then Render's own hop
+fn cloudflare_ip(headers: &HeaderMap) -> Option<IpAddr> {
+    headers
+        .get("cf-connecting-ip")
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_entry)
+}
+
+// Without Cloudflare: the proxy adds the address it saw to the end of X-Forwarded-For, after
+// anything the visitor wrote themselves, then its own internal hops. So the rightmost public
+// address is the real one
 fn forwarded_ip(headers: &HeaderMap) -> Option<IpAddr> {
     let entries: Vec<&str> = headers
         .get_all("x-forwarded-for")
@@ -123,6 +134,42 @@ mod tests {
         let mut extensions = Extensions::new();
         extensions.insert(ConnectInfo(SocketAddr::from(([10, 0, 0, 5], 4000))));
         client_ip(&headers, &extensions, behind_proxy)
+    }
+
+    fn from_cloudflare(forwarded: &str, cloudflare: &str) -> IpAddr {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", HeaderValue::from_str(forwarded).unwrap());
+        headers.insert(
+            "cf-connecting-ip",
+            HeaderValue::from_str(cloudflare).unwrap(),
+        );
+        client_ip(&headers, &Extensions::new(), true)
+    }
+
+    #[test]
+    fn on_render_cloudflares_header_is_the_player() {
+        // What Render sends: the visitor, then a Cloudflare server, then Render's own hop.
+        // The Cloudflare server's address is public too, so it mustn't be counted
+        let ip = from_cloudflare("203.0.113.7, 172.70.1.2, 10.1.2.3", "203.0.113.7");
+        assert_eq!(ip, IpAddr::from([203, 0, 113, 7]));
+    }
+
+    #[test]
+    fn a_faked_forwarded_address_doesnt_beat_cloudflare() {
+        let ip = from_cloudflare("1.2.3.4, 203.0.113.7, 172.70.1.2", "203.0.113.7");
+        assert_eq!(ip, IpAddr::from([203, 0, 113, 7]));
+    }
+
+    #[test]
+    fn cloudflares_header_is_ignored_unless_behind_a_proxy() {
+        let mut headers = HeaderMap::new();
+        headers.insert("cf-connecting-ip", HeaderValue::from_static("203.0.113.7"));
+        let mut extensions = Extensions::new();
+        extensions.insert(ConnectInfo(SocketAddr::from(([198, 51, 100, 9], 4000))));
+        assert_eq!(
+            client_ip(&headers, &extensions, false),
+            IpAddr::from([198, 51, 100, 9])
+        );
     }
 
     #[test]
