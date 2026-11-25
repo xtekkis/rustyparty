@@ -27,6 +27,8 @@ struct AppState {
     origins: AllowedOrigins,
     limits: Arc<Limits>,
     behind_proxy: bool,
+    // Logs what the proxy sends on each /health, to check once where player addresses come from
+    log_proxy_headers: bool,
 }
 
 #[tokio::main]
@@ -66,9 +68,18 @@ async fn main() {
         tracing::info!("Behind a proxy: player addresses come from X-Forwarded-For");
     }
 
+    // Off unless asked for: the lines it writes hold visitors' addresses
+    let log_proxy_headers = std::env::var("LOG_PROXY_HEADERS").as_deref() == Ok("true");
+    if log_proxy_headers {
+        tracing::warn!(
+            "LOG_PROXY_HEADERS is on: each /health logs the proxy headers. Turn it off after checking"
+        );
+    }
+
     let state = AppState {
         origins,
         behind_proxy,
+        log_proxy_headers,
         ..AppState::default()
     };
 

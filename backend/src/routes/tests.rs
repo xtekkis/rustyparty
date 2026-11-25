@@ -333,3 +333,47 @@ async fn without_a_frontend_only_the_game_server_answers() {
     assert_eq!(body_of(&app, "GET", "/").await.0, StatusCode::NOT_FOUND);
     assert_eq!(body_of(&app, "GET", "/health").await.0, StatusCode::OK);
 }
+
+async fn headers_of(app: &Router, path: &str) -> axum::http::HeaderMap {
+    let request = Request::get(path).body(Body::empty()).unwrap();
+    app.clone()
+        .oneshot(request)
+        .await
+        .unwrap()
+        .headers()
+        .clone()
+}
+
+#[tokio::test(start_paused = true)]
+async fn every_response_has_the_security_and_cache_headers() {
+    let temp = TempFolder::new();
+    std::fs::create_dir_all(temp.0.join("assets")).unwrap();
+    std::fs::write(temp.0.join("index.html"), "<p>the app</p>").unwrap();
+    std::fs::write(temp.0.join("assets/app-1234.js"), "console.log('app')").unwrap();
+    let app = router(AppState::default(), Some(&temp.0));
+
+    let page = headers_of(&app, "/join/KXTP").await;
+    let policy = page[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
+    assert!(policy.contains("default-src 'self'"));
+    assert!(policy.contains("frame-ancestors 'none'"));
+    assert_eq!(page[header::X_FRAME_OPTIONS], "DENY");
+    assert_eq!(page[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+    assert_eq!(page[header::REFERRER_POLICY], "no-referrer");
+    // A page is checked every time, so a deploy is picked up straight away
+    assert_eq!(page[header::CACHE_CONTROL], "no-cache");
+
+    // Built files never change, so they're kept
+    let built = headers_of(&app, "/assets/app-1234.js").await;
+    assert_eq!(
+        built[header::CACHE_CONTROL],
+        "public, max-age=31536000, immutable"
+    );
+    // But a missing one isn't
+    let missing = headers_of(&app, "/assets/gone-5678.js").await;
+    assert_eq!(missing[header::CACHE_CONTROL], "no-cache");
+
+    // The game server's answers have them too
+    let api = headers_of(&app, "/health").await;
+    assert_eq!(api[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+    assert_eq!(api[header::CACHE_CONTROL], "no-cache");
+}

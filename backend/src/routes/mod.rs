@@ -13,10 +13,12 @@ use tower_http::services::{ServeDir, ServeFile};
 
 use crate::AppState;
 
+mod headers;
 pub mod http;
 pub mod ws;
 
-// All routes of the app, open to the websites in state.origins.
+// All routes of the app, open to the websites in state.origins, with the security and cache
+// headers on every response.
 // With a frontend folder its files are served too, and other page addresses get index.html,
 // so links like /join/KXTP open the app. The routes above always come first
 pub fn router(state: AppState, frontend: Option<&Path>) -> Router {
@@ -36,7 +38,9 @@ pub fn router(state: AppState, frontend: Option<&Path>) -> Router {
             .fallback(move |request: Request| page_or_not_found(request, index.clone()));
         app = app.fallback_service(ServeDir::new(dir).fallback(pages));
     }
-    app.layer(cors).with_state(state)
+    app.layer(cors)
+        .layer(middleware::from_fn(headers::add_headers))
+        .with_state(state)
 }
 
 // An address that isn't a file: the app if it looks like a page, otherwise 404. A missing

@@ -1,7 +1,7 @@
 use axum::{
     Json,
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
 };
 use serde::Serialize;
 use tokio::sync::oneshot;
@@ -16,8 +16,28 @@ use crate::room::code::{MAX_CODE_ATTEMPTS, free_code};
 // Empty rooms close after a few minutes
 const MAX_ROOMS: usize = 1000;
 
-// Health check
-pub async fn health() -> &'static str {
+// Health check. With LOG_PROXY_HEADERS on, it also shows where player addresses come from
+pub async fn health(
+    State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
+    headers: HeaderMap,
+) -> &'static str {
+    if state.log_proxy_headers {
+        let header = |name: &str| {
+            headers
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("-")
+                .to_string()
+        };
+        tracing::info!(
+            "Proxy headers: x-forwarded-for={} cf-connecting-ip={} true-client-ip={} x-real-ip={}, counted as {ip}",
+            header("x-forwarded-for"),
+            header("cf-connecting-ip"),
+            header("true-client-ip"),
+            header("x-real-ip"),
+        );
+    }
     "ok"
 }
 
