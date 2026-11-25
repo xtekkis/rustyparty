@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::net::TcpListener;
@@ -71,7 +72,26 @@ async fn main() {
         ..AppState::default()
     };
 
-    let app = routes::router(state).layer(TraceLayer::new_for_http());
+    // The built frontend, set in the Docker image. In development Vite serves it instead
+    let frontend = std::env::var_os("FRONTEND_DIR").map(PathBuf::from);
+    match &frontend {
+        Some(dir) if !dir.join("index.html").is_file() => {
+            panic!("FRONTEND_DIR has no index.html: {}", dir.display())
+        }
+        Some(dir) => {
+            tracing::info!("Serving the frontend from {}", dir.display());
+            if matches!(state.origins, AllowedOrigins::Only(_)) {
+                tracing::info!(
+                    "The pages come from this server, so ALLOWED_ORIGINS must include its own address"
+                );
+            }
+        }
+        None => tracing::info!(
+            "FRONTEND_DIR is not set, so only the game server runs (Vite serves the frontend in development)"
+        ),
+    }
+
+    let app = routes::router(state, frontend.as_deref()).layer(TraceLayer::new_for_http());
 
     // Port from PORT, default 3000
     let port: u16 = match std::env::var("PORT") {

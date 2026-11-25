@@ -12,10 +12,13 @@ use crate::origins::AllowedOrigins;
 const FRONTEND: &str = "https://party.example";
 
 fn app(origins: AllowedOrigins) -> Router {
-    router(AppState {
-        origins,
-        ..AppState::default()
-    })
+    router(
+        AppState {
+            origins,
+            ..AppState::default()
+        },
+        None,
+    )
 }
 
 fn only_frontend() -> Router {
@@ -95,10 +98,13 @@ async fn a_websocket_without_a_website_gets_through() {
 
 // Behind Render's proxy, so a test picks its address with X-Forwarded-For
 fn behind_proxy() -> Router {
-    router(AppState {
-        behind_proxy: true,
-        ..AppState::default()
-    })
+    router(
+        AppState {
+            behind_proxy: true,
+            ..AppState::default()
+        },
+        None,
+    )
 }
 
 async fn send(app: &Router, method: &str, path: &str, address: &str) -> StatusCode {
@@ -237,4 +243,93 @@ async fn an_address_out_of_tries_cant_tell_real_rooms_apart() {
         app.clone().oneshot(request).await.unwrap().status(),
         StatusCode::TOO_MANY_REQUESTS
     );
+}
+
+async fn body_of(app: &Router, method: &str, path: &str) -> (StatusCode, String) {
+    let request = Request::builder()
+        .method(method)
+        .uri(path)
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    (status, String::from_utf8_lossy(&body).into_owned())
+}
+
+// A folder for one test, deleted afterwards even if the test fails
+struct TempFolder(std::path::PathBuf);
+
+impl TempFolder {
+    fn new() -> TempFolder {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("rustyparty-test-{}-{unique}", std::process::id()));
+        std::fs::create_dir_all(&path).unwrap();
+        TempFolder(path)
+    }
+}
+
+impl Drop for TempFolder {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).ok();
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_frontend_is_served_with_the_game_server() {
+    let temp = TempFolder::new();
+    let site = temp.0.join("site");
+    std::fs::create_dir_all(site.join("assets")).unwrap();
+    std::fs::write(site.join("index.html"), "<p>the app</p>").unwrap();
+    std::fs::write(site.join("assets/app.js"), "console.log('app')").unwrap();
+    // Next to the frontend folder, never to be served
+    std::fs::write(temp.0.join("secret.txt"), "secret").unwrap();
+    let app = router(AppState::default(), Some(&site));
+    let page = (StatusCode::OK, "<p>the app</p>".to_string());
+
+    assert_eq!(body_of(&app, "GET", "/").await, page);
+    // Invite links open the app, which reads the code from the address
+    assert_eq!(body_of(&app, "GET", "/join/KXTP").await, page);
+    assert_eq!(
+        body_of(&app, "GET", "/assets/app.js").await,
+        (StatusCode::OK, "console.log('app')".into())
+    );
+    // A missing file is a plain 404, never the app's HTML
+    assert_eq!(
+        body_of(&app, "GET", "/assets/old-name.js").await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        body_of(&app, "GET", "/favicon.ico").await.0,
+        StatusCode::NOT_FOUND
+    );
+    // The game server's own routes come first, and wrong game server paths are 404 too
+    assert_eq!(
+        body_of(&app, "GET", "/health").await,
+        (StatusCode::OK, "ok".into())
+    );
+    let (status, body) = body_of(&app, "GET", "/rooms/ABCD").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(body.contains("room_not_found"));
+    assert_eq!(
+        body_of(&app, "GET", "/rooms/ABCD/extra").await.0,
+        StatusCode::NOT_FOUND
+    );
+    // Nothing outside the folder
+    assert_eq!(
+        body_of(&app, "GET", "/../secret.txt").await,
+        (StatusCode::NOT_FOUND, String::new())
+    );
+}
+#[tokio::test(start_paused = true)]
+async fn without_a_frontend_only_the_game_server_answers() {
+    let app = router(AppState::default(), None);
+    assert_eq!(body_of(&app, "GET", "/").await.0, StatusCode::NOT_FOUND);
+    assert_eq!(body_of(&app, "GET", "/health").await.0, StatusCode::OK);
 }

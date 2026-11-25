@@ -1,0 +1,11 @@
+# Only what the build needs is sent to Docker: no secrets, history, notes or build output
+.git
+.claude
+**/.env
+**/.env.*
+**/*.local
+PLAN.md
+design-kit
+**/node_modules
+frontend/dist
+**/target

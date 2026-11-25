@@ -10,10 +10,10 @@ rand = "0.10.3"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tokio = { version = "1.53.2", features = ["full"] }
-tower-http = { version = "0.7.1", features = ["cors", "trace"] }
+tower = { version = "0.5.3", features = ["util"] }
+tower-http = { version = "0.7.1", features = ["cors", "fs", "trace"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 [dev-dependencies]
-tower = { version = "0.5.3", features = ["util"] }
 tokio = { version = "1.53.2", features = ["test-util"] }

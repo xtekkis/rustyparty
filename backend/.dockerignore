@@ -1,2 +1,0 @@
-# Only Cargo.toml, Cargo.lock, src and data are needed to build
-target/
