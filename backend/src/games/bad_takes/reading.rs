@@ -9,6 +9,7 @@ use crate::games::{GameCtx, GameError, PlayerId, TimerId};
 impl BadTakes {
     // The answers go into a bag, for the judge to pull out one at a time
     pub(super) fn start_reading(&mut self, ctx: &mut GameCtx) {
+        self.note_missed_rounds();
         // Shuffled, so the judge can't tell whose cards came in first
         self.reading_order = self.submitted_players();
         self.reading_order.shuffle(&mut self.rng);

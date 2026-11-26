@@ -3,9 +3,9 @@ use std::collections::HashSet;
 
 use serde_json::json;
 
-use super::BadTakes;
 use super::deck::CardId;
 use super::state::Phase;
+use super::{BadTakes, MISSED_ROUNDS_TO_SIT_OUT};
 use crate::games::{GameCtx, GameError, PlayerId};
 
 impl BadTakes {
@@ -74,6 +74,9 @@ impl BadTakes {
             cards.push(hand.remove(index));
         }
         self.submissions.insert(player, cards);
+        // Playing brings someone who was sitting out straight back
+        self.missed.remove(&player);
+        self.sitting_out.remove(&player);
 
         // Everyone sees who has played, nobody sees what
         ctx.broadcast(json!({ "event": "submitted", "player": player }));
@@ -86,11 +89,11 @@ impl BadTakes {
         if self.phase != Phase::Submitting || self.submissions.is_empty() {
             return;
         }
-        // Players whose phone has dropped aren't waited for
+        // Players whose phone has dropped, or who are sitting out, aren't waited for
         let everyone_played = self
             .players
             .iter()
-            .filter(|&&player| Some(player) != self.judge && !self.away.contains(&player))
+            .filter(|&&player| Some(player) != self.judge && self.counts_on(player))
             .all(|player| self.submissions.contains_key(player));
         if everyone_played {
             self.start_reading(ctx);
@@ -100,9 +103,25 @@ impl BadTakes {
     // Whoever hasn't played by now sits this round out
     pub(super) fn submit_time_up(&mut self, ctx: &mut GameCtx) {
         if self.submissions.is_empty() {
+            self.note_missed_rounds();
             self.skip_round(ctx);
         } else {
             self.start_reading(ctx);
+        }
+    }
+
+    // Playing is over for this round. Who didn't play, and has now missed too many rounds in a
+    // row, sits out until they play again
+    pub(super) fn note_missed_rounds(&mut self) {
+        for player in self.players.clone() {
+            if Some(player) == self.judge || self.submissions.contains_key(&player) {
+                continue;
+            }
+            let missed = self.missed.entry(player).or_default();
+            *missed += 1;
+            if *missed >= MISSED_ROUNDS_TO_SIT_OUT {
+                self.sitting_out.insert(player);
+            }
         }
     }
 

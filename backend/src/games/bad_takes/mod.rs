@@ -55,6 +55,8 @@ pub(crate) const IDLE_JUDGE_DURATION: Duration = Duration::from_secs(20);
 pub(crate) const REVEAL_DURATION: Duration = Duration::from_secs(4);
 // How long a judge whose phone dropped has to come back before the round goes to the next judge
 pub(crate) const JUDGE_AWAY_DURATION: Duration = Duration::from_secs(15);
+// Rounds in a row without playing before a player sits out
+const MISSED_ROUNDS_TO_SIT_OUT: u8 = 2;
 
 // The registry entry, built at startup because the player limit depends on the deck
 pub fn info() -> GameInfo {
@@ -106,6 +108,11 @@ pub struct BadTakes {
     waiting: Vec<PlayerId>,
     // Seated players whose phone has dropped. They keep their seat, but nobody waits for them
     away: HashSet<PlayerId>,
+    // Rounds in a row each player didn't play in
+    missed: HashMap<PlayerId, u8>,
+    // Players sitting out after missing rounds: seated with their cards and points, but nobody
+    // waits for them or makes them judge until they play again
+    sitting_out: HashSet<PlayerId>,
     // Seats at the table, limited by the deck
     max_players: usize,
     // Points per player, in player order so every view lists them the same way
@@ -153,6 +160,8 @@ impl BadTakes {
             seating: Vec::new(),
             waiting: Vec::new(),
             away: HashSet::new(),
+            missed: HashMap::new(),
+            sitting_out: HashSet::new(),
             max_players: max_players(answers.len()),
             scores: BTreeMap::new(),
             prompts: Deck::shuffled(prompts, &mut rng),
@@ -177,6 +186,11 @@ impl BadTakes {
 
     fn timer_id(&self, timer: Timer) -> TimerId {
         self.round * 100 + timer as TimerId
+    }
+
+    // Whether the round waits for this player and they can be judge: not away, not sitting out
+    fn counts_on(&self, player: PlayerId) -> bool {
+        !self.away.contains(&player) && !self.sitting_out.contains(&player)
     }
 
     // Whether this round's judge is away while the round still needs them
@@ -251,10 +265,14 @@ impl Game for BadTakes {
     fn player_back(&mut self, player: PlayerId, _ctx: &mut GameCtx) {
         // Back in time to play this round, and waited for again
         self.away.remove(&player);
+        self.missed.remove(&player);
+        self.sitting_out.remove(&player);
     }
 
     fn player_left(&mut self, player: PlayerId, ctx: &mut GameCtx) {
         self.away.remove(&player);
+        self.missed.remove(&player);
+        self.sitting_out.remove(&player);
         self.players.retain(|&id| id != player);
         self.waiting.retain(|&id| id != player);
         self.scores.remove(&player);

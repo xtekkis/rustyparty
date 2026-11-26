@@ -54,15 +54,15 @@ impl BadTakes {
             .judge
             .and_then(|judge| self.seating.iter().position(|&player| player == judge))
             .map_or(0, |seat| seat + 1);
-        // Walk round the table from there, skipping anyone who has left or whose phone is down.
-        // If every phone is down, the next seated player judges anyway
+        // Walk round the table from there, skipping anyone who has left, whose phone is down or
+        // who is sitting out. If that's everyone, the next seated player judges anyway
         let around = || {
             (0..self.seating.len())
                 .map(move |step| self.seating[(after_judge + step) % self.seating.len()])
                 .filter(|player| self.players.contains(player))
         };
         around()
-            .find(|player| !self.away.contains(player))
+            .find(|&player| self.counts_on(player))
             .or_else(|| around().next())
     }
 

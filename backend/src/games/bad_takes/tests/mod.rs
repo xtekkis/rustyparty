@@ -15,6 +15,7 @@ mod privacy;
 mod reading;
 mod rounds;
 mod setup;
+mod sitting_out;
 mod submitting;
 
 // A game with the starter deck, dealt the same way every run
@@ -49,6 +50,12 @@ fn submit(game: &mut BadTakes, player: PlayerId, cards: &[CardId]) -> Result<Gam
         &mut ctx,
     )?;
     Ok(ctx)
+}
+
+// This player plays their first card, enough for the pick 1 prompt in started_game
+fn play(game: &mut BadTakes, player: PlayerId) {
+    let card = [game.hands[&player][0].id];
+    submit(game, player, &card).unwrap();
 }
 
 // Everyone but the judge plays their first cards, as many as the prompt needs

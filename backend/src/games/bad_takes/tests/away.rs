@@ -1,12 +1,6 @@
 // Players whose phone has dropped keep their seat, but nobody waits for them
 use super::*;
 
-// This player plays their first card, enough for the pick 1 prompt in started_game
-fn play(game: &mut BadTakes, player: PlayerId) {
-    let card = [game.hands[&player][0].id];
-    submit(game, player, &card).unwrap();
-}
-
 #[test]
 fn the_round_moves_on_without_a_player_who_is_away() {
     // Player 1 judges, player 4's phone is down
