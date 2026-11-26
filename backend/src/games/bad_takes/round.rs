@@ -54,10 +54,16 @@ impl BadTakes {
             .judge
             .and_then(|judge| self.seating.iter().position(|&player| player == judge))
             .map_or(0, |seat| seat + 1);
-        // Walk round the table from there, skipping anyone who has left
-        (0..self.seating.len())
-            .map(|step| self.seating[(after_judge + step) % self.seating.len()])
-            .find(|player| self.players.contains(player))
+        // Walk round the table from there, skipping anyone who has left or whose phone is down.
+        // If every phone is down, the next seated player judges anyway
+        let around = || {
+            (0..self.seating.len())
+                .map(move |step| self.seating[(after_judge + step) % self.seating.len()])
+                .filter(|player| self.players.contains(player))
+        };
+        around()
+            .find(|player| !self.away.contains(player))
+            .or_else(|| around().next())
     }
 
     // Fill a player's hand up to 7 cards
@@ -76,7 +82,7 @@ impl BadTakes {
         }
     }
 
-    // The judge left mid-round: everyone takes their cards back and the next judge starts again
+    // The judge left or dropped mid-round: everyone takes their cards back and the next judge starts again
     pub(super) fn cancel_round(&mut self, ctx: &mut GameCtx) {
         for (player, cards) in self.submissions.drain() {
             if let Some(hand) = self.hands.get_mut(&player) {

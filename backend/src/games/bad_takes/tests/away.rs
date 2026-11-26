@@ -62,3 +62,83 @@ fn an_answer_played_before_going_away_still_counts() {
     assert_eq!(game.phase, Phase::Reading);
     assert_eq!(game.reading_order.len(), 3);
 }
+
+#[test]
+fn the_only_connected_player_judges_again() {
+    let mut game = started_game(&[1, 2, 3, 4]);
+    for player in [2, 3, 4] {
+        game.player_away(player, &mut GameCtx::default());
+    }
+    game.start_round(&mut GameCtx::default());
+    assert_eq!(game.judge, Some(1));
+}
+
+#[test]
+fn the_next_judge_skips_a_player_who_is_away() {
+    // Player 1 judges now, player 2 is next but their phone is down
+    let mut game = started_game(&[1, 2, 3, 4]);
+    game.player_away(2, &mut GameCtx::default());
+    game.start_round(&mut GameCtx::default());
+    assert_eq!(game.judge, Some(3));
+}
+
+#[test]
+fn someone_judges_even_if_every_phone_is_down() {
+    let mut game = started_game(&[1, 2, 3, 4]);
+    for player in [1, 2, 3, 4] {
+        game.player_away(player, &mut GameCtx::default());
+    }
+    game.start_round(&mut GameCtx::default());
+    assert_eq!(game.judge, Some(2));
+}
+
+#[test]
+fn a_player_away_at_the_start_isnt_the_first_judge() {
+    let cards = deck::starter_deck();
+    let mut game = BadTakes::new(
+        7,
+        cards.prompts.clone(),
+        cards.answers.clone(),
+        StdRng::seed_from_u64(1),
+    );
+    // The room says who's away just before the game starts
+    game.player_away(1, &mut GameCtx::default());
+    game.start(&[1, 2, 3], &mut GameCtx::default());
+    assert_eq!(game.judge, Some(2));
+}
+
+#[test]
+fn a_judge_who_drops_gets_a_moment_then_the_round_moves_on() {
+    let mut game = started_game(&[1, 2, 3, 4]);
+    play(&mut game, 2);
+
+    let mut ctx = GameCtx::default();
+    game.player_away(1, &mut ctx);
+    let wait = game.timer_id(Timer::JudgeAway);
+    assert_eq!(ctx.background_timers, [(wait, JUDGE_AWAY_DURATION)]);
+    assert!(
+        ctx.timers.is_empty(),
+        "the countdown on phones doesn't change"
+    );
+
+    let mut ctx = GameCtx::default();
+    game.handle_timer(wait, &mut ctx);
+    assert_eq!(ctx.outgoing[0], json!({ "event": "round_cancelled" }));
+    assert_eq!(game.round, 2);
+    assert_eq!(game.judge, Some(2));
+    assert_eq!(game.hands[&2].len(), HAND_SIZE, "player 2's card came back");
+}
+
+#[test]
+fn a_judge_back_in_time_keeps_the_round() {
+    let mut game = started_game(&[1, 2, 3, 4]);
+    game.player_away(1, &mut GameCtx::default());
+    let wait = game.timer_id(Timer::JudgeAway);
+    game.player_back(1, &mut GameCtx::default());
+
+    let mut ctx = GameCtx::default();
+    game.handle_timer(wait, &mut ctx);
+    assert!(ctx.outgoing.is_empty());
+    assert_eq!(game.round, 1);
+    assert_eq!(game.judge, Some(1));
+}

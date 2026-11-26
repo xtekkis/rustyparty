@@ -21,8 +21,7 @@ impl Room {
         let mut game = (info.create)(&self.settings);
         let players: Vec<u32> = self.players.iter().map(|player| player.id).collect();
         let mut ctx = GameCtx::default();
-        game.start(&players, &mut ctx);
-        // Anyone whose phone is down right now keeps a seat, but isn't waited for
+        // Anyone whose phone is down right now gets a seat, but isn't waited for or made judge
         for player in self
             .players
             .iter()
@@ -30,6 +29,7 @@ impl Room {
         {
             game.player_away(player.id, &mut ctx);
         }
+        game.start(&players, &mut ctx);
 
         self.state = RoomState::InGame {
             game,
@@ -115,6 +115,9 @@ impl Room {
             if let RoomState::InGame { ends_at, .. } = &mut self.state {
                 *ends_at = Some(Instant::now() + after);
             }
+        }
+        for (timer, after) in ctx.background_timers {
+            remind(me, after, RoomCommand::GameTimer { game_number, timer });
         }
         self.send_game_views();
     }

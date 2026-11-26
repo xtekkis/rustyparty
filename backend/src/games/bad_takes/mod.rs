@@ -37,6 +37,8 @@ enum Timer {
     Reveal = 2,
     Judge = 3,
     Pull = 4,
+    // Far above Pull, whose ids count up from it as cards come out
+    JudgeAway = 90,
 }
 
 // How long players have to play their cards
@@ -51,6 +53,8 @@ pub(crate) const JUDGE_DURATION: Duration = Duration::from_secs(45);
 pub(crate) const IDLE_JUDGE_DURATION: Duration = Duration::from_secs(20);
 // The winning sentence and the scores, before the next round or the final results
 pub(crate) const REVEAL_DURATION: Duration = Duration::from_secs(4);
+// How long a judge whose phone dropped has to come back before the round goes to the next judge
+pub(crate) const JUDGE_AWAY_DURATION: Duration = Duration::from_secs(15);
 
 // The registry entry, built at startup because the player limit depends on the deck
 pub fn info() -> GameInfo {
@@ -174,6 +178,15 @@ impl BadTakes {
     fn timer_id(&self, timer: Timer) -> TimerId {
         self.round * 100 + timer as TimerId
     }
+
+    // Whether this round's judge is away while the round still needs them
+    fn judge_away_mid_round(&self) -> bool {
+        let mid_round = matches!(
+            self.phase,
+            Phase::Submitting | Phase::Reading | Phase::Judging
+        );
+        mid_round && self.judge.is_some_and(|judge| self.away.contains(&judge))
+    }
 }
 
 impl Game for BadTakes {
@@ -216,6 +229,8 @@ impl Game for BadTakes {
             self.judge_time_up(ctx);
         } else if timer == self.timer_id(Timer::Reveal) && self.phase == Phase::RoundOver {
             self.reveal_over(ctx);
+        } else if timer == self.timer_id(Timer::JudgeAway) && self.judge_away_mid_round() {
+            self.cancel_round(ctx);
         }
     }
 
@@ -225,6 +240,10 @@ impl Game for BadTakes {
 
     fn player_away(&mut self, player: PlayerId, ctx: &mut GameCtx) {
         self.away.insert(player);
+        // A judge whose phone dropped gets a moment to come back, then the round moves on
+        if self.judge_away_mid_round() {
+            ctx.start_background_timer(self.timer_id(Timer::JudgeAway), JUDGE_AWAY_DURATION);
+        }
         // They may have been the last one the others were waiting for
         self.judge_when_everyone_submitted(ctx);
     }

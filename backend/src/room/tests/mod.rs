@@ -4,8 +4,8 @@ use super::in_game::RESULTS_DURATION;
 use super::vote::VOTE_DURATION;
 use super::*;
 use crate::games::bad_takes::{
-    BadTakes, IDLE_JUDGE_DURATION, IDLE_PULL_DURATION, PULL_DURATION, REVEAL_DURATION, answer_ids,
-    deck,
+    BadTakes, IDLE_JUDGE_DURATION, IDLE_PULL_DURATION, JUDGE_AWAY_DURATION, PULL_DURATION,
+    REVEAL_DURATION, answer_ids, deck,
 };
 use crate::games::dummy::{DUMMY_INFO, DummyGame};
 use crate::games::{Game, GameCtx, GameInfo};

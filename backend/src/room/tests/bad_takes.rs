@@ -209,3 +209,29 @@ async fn a_dropped_phone_doesnt_hold_up_the_round() {
     assert_eq!(alex_sees["phase"], "reading");
     assert_eq!(alex_sees["in_bag"], 2);
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_judge_whose_phone_drops_is_replaced_after_a_moment() {
+    let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim"]);
+    let (commands, mut reminders) = mpsc::channel(16);
+    let me = commands.downgrade();
+    room.start_game(&bad_takes(), &me);
+    game_messages(&mut phones[1]);
+
+    // Alex is judging when his phone drops
+    let alex = room.players[0].sender.clone();
+    room.disconnect(1, &alex, &me);
+    tokio::time::sleep(JUDGE_AWAY_DURATION + Duration::from_secs(1)).await;
+    while let Ok(reminder) = reminders.try_recv() {
+        room.handle(reminder, &me);
+    }
+
+    let (events, sam_sees) = game_messages(&mut phones[1]);
+    assert!(
+        events
+            .iter()
+            .any(|event| event["event"] == "round_cancelled")
+    );
+    assert_eq!(sam_sees["round"], 2);
+    assert_eq!(sam_sees["judge"], 2);
+}

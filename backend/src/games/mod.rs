@@ -32,7 +32,10 @@ pub struct GameError {
 #[derive(Default)]
 pub struct GameCtx {
     pub outgoing: Vec<Value>,
+    // Phones count down to the latest of these
     pub timers: Vec<(TimerId, Duration)>,
+    // Timers phones don't count down to, like a short wait for a dropped judge
+    pub background_timers: Vec<(TimerId, Duration)>,
 }
 
 impl GameCtx {
@@ -44,6 +47,11 @@ impl GameCtx {
     // The room calls handle_timer with this id once the time is up
     pub fn start_timer(&mut self, timer: TimerId, after: Duration) {
         self.timers.push((timer, after));
+    }
+
+    // The same, without changing the countdown phones show
+    pub fn start_background_timer(&mut self, timer: TimerId, after: Duration) {
+        self.background_timers.push((timer, after));
     }
 }
 
@@ -70,7 +78,8 @@ pub trait Game: Send {
     // A player left for good: left, kicked, banned, or their grace period ran out
     fn player_left(&mut self, player: PlayerId, ctx: &mut GameCtx);
 
-    // A player's phone dropped. They keep their seat, but nobody should wait for them
+    // A player's phone dropped. They keep their seat, but nobody should wait for them.
+    // Also called just before start for anyone already away
     fn player_away(&mut self, _player: PlayerId, _ctx: &mut GameCtx) {}
 
     // That phone is back

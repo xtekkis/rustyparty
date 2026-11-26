@@ -26,7 +26,7 @@ export function BadTakes({ server }: BadTakesProps) {
   useNewEvents(events, (event) => {
     const happened = (event as BadTakesEvent).event
     if (happened === 'round_skipped') flash.show('Nobody played! New round')
-    if (happened === 'round_cancelled') flash.show('The judge left. Round cancelled, cards returned')
+    if (happened === 'round_cancelled') flash.show('The judge is gone. Round cancelled, cards returned')
   })
 
   return (
