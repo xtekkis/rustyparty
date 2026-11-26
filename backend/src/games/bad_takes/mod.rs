@@ -12,7 +12,7 @@ pub mod state;
 // Playing cards
 mod submitting;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Duration;
 
 use rand::rngs::StdRng;
@@ -100,6 +100,8 @@ pub struct BadTakes {
     seating: Vec<PlayerId>,
     // Late joiners, seated at the start of the next round
     waiting: Vec<PlayerId>,
+    // Seated players whose phone has dropped. They keep their seat, but nobody waits for them
+    away: HashSet<PlayerId>,
     // Seats at the table, limited by the deck
     max_players: usize,
     // Points per player, in player order so every view lists them the same way
@@ -146,6 +148,7 @@ impl BadTakes {
             players: Vec::new(),
             seating: Vec::new(),
             waiting: Vec::new(),
+            away: HashSet::new(),
             max_players: max_players(answers.len()),
             scores: BTreeMap::new(),
             prompts: Deck::shuffled(prompts, &mut rng),
@@ -220,7 +223,19 @@ impl Game for BadTakes {
         self.waiting.push(player);
     }
 
+    fn player_away(&mut self, player: PlayerId, ctx: &mut GameCtx) {
+        self.away.insert(player);
+        // They may have been the last one the others were waiting for
+        self.judge_when_everyone_submitted(ctx);
+    }
+
+    fn player_back(&mut self, player: PlayerId, _ctx: &mut GameCtx) {
+        // Back in time to play this round, and waited for again
+        self.away.remove(&player);
+    }
+
     fn player_left(&mut self, player: PlayerId, ctx: &mut GameCtx) {
+        self.away.remove(&player);
         self.players.retain(|&id| id != player);
         self.waiting.retain(|&id| id != player);
         self.scores.remove(&player);

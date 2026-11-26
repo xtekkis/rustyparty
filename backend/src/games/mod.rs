@@ -70,6 +70,12 @@ pub trait Game: Send {
     // A player left for good: left, kicked, banned, or their grace period ran out
     fn player_left(&mut self, player: PlayerId, ctx: &mut GameCtx);
 
+    // A player's phone dropped. They keep their seat, but nobody should wait for them
+    fn player_away(&mut self, _player: PlayerId, _ctx: &mut GameCtx) {}
+
+    // That phone is back
+    fn player_back(&mut self, _player: PlayerId, _ctx: &mut GameCtx) {}
+
     // What this player is allowed to see right now
     fn view_for(&self, player: PlayerId) -> Value;
 

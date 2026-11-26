@@ -185,3 +185,27 @@ async fn hands_are_never_sent_to_other_players() {
         }
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_dropped_phone_doesnt_hold_up_the_round() {
+    let (mut room, mut phones) = room_with(&["Alex", "Sam", "Kim", "Lee"]);
+    let (commands, _reminders) = mpsc::channel(16);
+    let me = commands.downgrade();
+    // Lee's phone is already down when the game starts
+    let lee = room.players[3].sender.clone();
+    room.disconnect(4, &lee, &me);
+    room.start_game(&bad_takes(), &me);
+
+    // Sam and Kim play, and nobody waits for Lee
+    let views: Vec<Value> = phones[1..3]
+        .iter_mut()
+        .map(|phone| game_messages(phone).1)
+        .collect();
+    for (player_id, view) in [(2, &views[0]), (3, &views[1])] {
+        let card = &view["hand"][0]["id"];
+        room.game_action(player_id, json!({ "kind": "submit", "cards": [card] }), &me);
+    }
+    let (_, alex_sees) = game_messages(&mut phones[0]);
+    assert_eq!(alex_sees["phase"], "reading");
+    assert_eq!(alex_sees["in_bag"], 2);
+}

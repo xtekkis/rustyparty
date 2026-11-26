@@ -6,7 +6,7 @@ use tokio::time::Instant;
 
 use super::actor::{RoomCommand, remind};
 use super::{Room, RoomState, seconds_until};
-use crate::games::{GameCtx, GameInfo};
+use crate::games::{Game, GameCtx, GameInfo};
 use crate::protocol::ServerMessage;
 
 // How long the final scores stay on screen
@@ -22,6 +22,14 @@ impl Room {
         let players: Vec<u32> = self.players.iter().map(|player| player.id).collect();
         let mut ctx = GameCtx::default();
         game.start(&players, &mut ctx);
+        // Anyone whose phone is down right now keeps a seat, but isn't waited for
+        for player in self
+            .players
+            .iter()
+            .filter(|player| player.disconnected_since.is_some())
+        {
+            game.player_away(player.id, &mut ctx);
+        }
 
         self.state = RoomState::InGame {
             game,
@@ -62,23 +70,35 @@ impl Room {
         player_id: u32,
         me: &WeakSender<RoomCommand>,
     ) {
-        let RoomState::InGame { game, number, .. } = &mut self.state else {
-            return;
-        };
-        let number = *number;
-        let mut ctx = GameCtx::default();
-        game.player_joined(player_id, &mut ctx);
-        self.run_game_ctx(ctx, number, me);
+        self.tell_game(me, |game, ctx| game.player_joined(player_id, ctx));
     }
 
     // Someone is gone for good, the game may need to cancel a round or end
     pub(super) fn tell_game_about_leaver(&mut self, player_id: u32, me: &WeakSender<RoomCommand>) {
+        self.tell_game(me, |game, ctx| game.player_left(player_id, ctx));
+    }
+
+    // A phone dropped: the seat is kept, but the game stops waiting for it
+    pub(super) fn tell_game_about_away(&mut self, player_id: u32, me: &WeakSender<RoomCommand>) {
+        self.tell_game(me, |game, ctx| game.player_away(player_id, ctx));
+    }
+
+    pub(super) fn tell_game_about_return(&mut self, player_id: u32, me: &WeakSender<RoomCommand>) {
+        self.tell_game(me, |game, ctx| game.player_back(player_id, ctx));
+    }
+
+    // Tell the running game something, then carry out what it asks for
+    fn tell_game(
+        &mut self,
+        me: &WeakSender<RoomCommand>,
+        tell: impl FnOnce(&mut dyn Game, &mut GameCtx),
+    ) {
         let RoomState::InGame { game, number, .. } = &mut self.state else {
             return;
         };
         let number = *number;
         let mut ctx = GameCtx::default();
-        game.player_left(player_id, &mut ctx);
+        tell(game.as_mut(), &mut ctx);
         self.run_game_ctx(ctx, number, me);
     }
 

@@ -37,6 +37,7 @@ impl Room {
                     },
                 );
                 self.broadcast_players();
+                self.tell_game_about_return(id, me);
                 // Back mid-game: show them where things are right away
                 self.send_game_view_to(id);
                 return Some(id);
@@ -196,6 +197,7 @@ impl Room {
         player.disconnected_since = Some(since);
         tracing::info!("Player {player_id} disconnected from room {}", self.code);
         self.broadcast(&self.lobby_message());
+        self.tell_game_about_away(player_id, me);
 
         remind(
             me,

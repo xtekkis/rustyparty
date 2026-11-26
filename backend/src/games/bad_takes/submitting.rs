@@ -86,10 +86,11 @@ impl BadTakes {
         if self.phase != Phase::Submitting || self.submissions.is_empty() {
             return;
         }
+        // Players whose phone has dropped aren't waited for
         let everyone_played = self
             .players
             .iter()
-            .filter(|&&player| Some(player) != self.judge)
+            .filter(|&&player| Some(player) != self.judge && !self.away.contains(&player))
             .all(|player| self.submissions.contains_key(player));
         if everyone_played {
             self.start_reading(ctx);

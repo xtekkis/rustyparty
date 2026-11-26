@@ -5,6 +5,7 @@ use rand::SeedableRng;
 use std::collections::HashSet;
 
 mod auto_pull;
+mod away;
 mod cards;
 mod game_end;
 mod judging;
