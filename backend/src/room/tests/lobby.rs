@@ -138,3 +138,90 @@ fn banned_player_is_told_and_blocked() {
     assert!(!room.is_banned("some-other-token"));
     assert!(!room.ban_player(sam_id));
 }
+
+// Carry out every reminder that's due by now
+fn run_reminders(
+    room: &mut Room,
+    reminders: &mut mpsc::Receiver<RoomCommand>,
+    me: &WeakSender<RoomCommand>,
+) {
+    while let Ok(reminder) = reminders.try_recv() {
+        room.handle(reminder, me);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_away_host_hands_over_after_30_seconds() {
+    let (mut room, _phones) = room_with(&["Alex", "Sam", "Kim"]);
+    let (commands, mut reminders) = mpsc::channel(16);
+    let me = commands.downgrade();
+    let alex = room.players[0].sender.clone();
+    room.disconnect(1, &alex, &me);
+
+    tokio::time::sleep(HOST_AWAY_GRACE - Duration::from_secs(1)).await;
+    run_reminders(&mut room, &mut reminders, &me);
+    assert_eq!(room.host, Some(1), "not yet");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    run_reminders(&mut room, &mut reminders, &me);
+    assert_eq!(room.host, Some(2));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_host_back_in_time_stays_host() {
+    let (mut room, _phones) = room_with(&["Alex", "Sam", "Kim"]);
+    let (commands, mut reminders) = mpsc::channel(16);
+    let me = commands.downgrade();
+    let alex = room.players[0].sender.clone();
+    let token = room.players[0].token.clone();
+    room.disconnect(1, &alex, &me);
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    room.reconnect(&token, test_sender());
+
+    tokio::time::sleep(HOST_AWAY_GRACE).await;
+    run_reminders(&mut room, &mut reminders, &me);
+    assert_eq!(room.host, Some(1));
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_host_role_skips_players_who_are_away_too() {
+    let (mut room, _phones) = room_with(&["Alex", "Sam", "Kim"]);
+    let (commands, mut reminders) = mpsc::channel(16);
+    let me = commands.downgrade();
+    let sam = room.players[1].sender.clone();
+    room.disconnect(2, &sam, &me);
+    let alex = room.players[0].sender.clone();
+    room.disconnect(1, &alex, &me);
+
+    tokio::time::sleep(HOST_AWAY_GRACE + Duration::from_secs(1)).await;
+    run_reminders(&mut room, &mut reminders, &me);
+    assert_eq!(room.host, Some(3));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_host_who_comes_back_late_is_a_regular_player() {
+    let (mut room, _phones) = room_with(&["Alex", "Sam", "Kim"]);
+    let (commands, mut reminders) = mpsc::channel(16);
+    let me = commands.downgrade();
+    let alex = room.players[0].sender.clone();
+    let token = room.players[0].token.clone();
+    room.disconnect(1, &alex, &me);
+    tokio::time::sleep(HOST_AWAY_GRACE + Duration::from_secs(1)).await;
+    run_reminders(&mut room, &mut reminders, &me);
+
+    room.reconnect(&token, test_sender());
+    assert_eq!(room.host, Some(2));
+}
+
+#[test]
+fn a_leaving_host_hands_over_to_someone_connected() {
+    let mut room = Room::new("KXTP".to_string());
+    let alex = room.add_player("Alex".to_string(), None, test_sender()).id;
+    let sam = room.add_player("Sam".to_string(), None, test_sender()).id;
+    let kim = room.add_player("Kim".to_string(), None, test_sender()).id;
+    room.player_mut(sam)
+        .expect("Sam is here")
+        .disconnected_since = Some(Instant::now());
+
+    room.remove_player(alex);
+    assert_eq!(room.host, Some(kim), "Sam's phone is down");
+}

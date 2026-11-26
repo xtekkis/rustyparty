@@ -4,7 +4,8 @@ use tokio::time::Instant;
 use super::actor::{Connection, RoomCommand, remind, send};
 use super::player::is_known_avatar;
 use super::{
-    DISCONNECT_GRACE, MAX_ROOM_PLAYERS, Room, RoomState, clean_nickname, is_valid_points_to_win,
+    DISCONNECT_GRACE, HOST_AWAY_GRACE, MAX_ROOM_PLAYERS, Room, RoomState, clean_nickname,
+    is_valid_points_to_win,
 };
 use crate::protocol::ServerMessage;
 
@@ -204,6 +205,38 @@ impl Room {
             DISCONNECT_GRACE,
             RoomCommand::GraceOver { player_id, since },
         );
+        if self.host == Some(player_id) {
+            remind(
+                me,
+                HOST_AWAY_GRACE,
+                RoomCommand::HostAway { player_id, since },
+            );
+        }
+    }
+
+    // The host is still away since that same moment, so someone connected takes over
+    pub(super) fn pass_host_if_still_away(&mut self, player_id: u32, since: Instant) {
+        let still_away = self
+            .players
+            .iter()
+            .any(|player| player.id == player_id && player.disconnected_since == Some(since));
+        if self.host != Some(player_id) || !still_away {
+            return;
+        }
+        let Some(next) = self.next_host().filter(|&id| {
+            self.players
+                .iter()
+                .any(|player| player.id == id && player.disconnected_since.is_none())
+        }) else {
+            // Nobody connected to hand it to, the host keeps it for now
+            return;
+        };
+        self.host = Some(next);
+        tracing::info!(
+            "Player {player_id} was away, player {next} is host of room {} now",
+            self.code
+        );
+        self.broadcast_players();
     }
 
     // Nobody is ready again until they choose to be, or the vote would start straight away

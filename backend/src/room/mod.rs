@@ -29,6 +29,8 @@ use player::{Player, generate_token};
 pub const MAX_ROOM_PLAYERS: usize = 10;
 // How long a disconnected player keeps their seat
 pub const DISCONNECT_GRACE: Duration = Duration::from_secs(90);
+// How long a disconnected host keeps the host role. Shorter, so the room isn't left without one
+pub const HOST_AWAY_GRACE: Duration = Duration::from_secs(30);
 
 const POINTS_TO_WIN_DEFAULT: u8 = 7;
 const POINTS_TO_WIN_MIN: u8 = 3;
@@ -109,6 +111,23 @@ impl Room {
         }
     }
 
+    // Who takes over as host: the earliest to join who's connected, or the earliest of all
+    // if nobody is
+    pub fn next_host(&self) -> Option<u32> {
+        let connected = self
+            .players
+            .iter()
+            .filter(|player| Some(player.id) != self.host)
+            .find(|player| player.disconnected_since.is_none());
+        connected
+            .or_else(|| {
+                self.players
+                    .iter()
+                    .find(|player| Some(player.id) != self.host)
+            })
+            .map(|player| player.id)
+    }
+
     // Nicknames are unique per room, ignoring case and the joiners inside emoji
     pub fn has_nickname(&self, nickname: &str) -> bool {
         let key = nickname_key(nickname);
@@ -163,7 +182,7 @@ impl Room {
 
         // Players are kept in join order, so the first one left joined earliest
         if self.host == Some(player_id) {
-            self.host = self.players.first().map(|player| player.id);
+            self.host = self.next_host();
         }
 
         self.players.len() < count_before

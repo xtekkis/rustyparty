@@ -71,6 +71,11 @@ pub enum RoomCommand {
         player_id: u32,
         since: Instant,
     },
+    // Sent by the room to itself when a host has been away long enough to hand the role on
+    HostAway {
+        player_id: u32,
+        since: Instant,
+    },
     // Sent by the room to itself when the results have been shown long enough
     ResultsOver {
         number: u32,
@@ -190,6 +195,9 @@ impl Room {
                     self.broadcast_players();
                     self.tell_game_about_leaver(player_id, me);
                 }
+            }
+            RoomCommand::HostAway { player_id, since } => {
+                self.pass_host_if_still_away(player_id, since)
             }
             RoomCommand::PlayerCount { reply } => {
                 let _ = reply.send(self.players.len());
