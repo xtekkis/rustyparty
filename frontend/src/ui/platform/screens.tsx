@@ -90,12 +90,25 @@ export interface LobbyScreenProps {
   onToggleReady: () => void;
   onCopy: () => void;
   onShare?: () => void;
+  /** Shows the Leave tile at the top (added in rustyparty). While confirmingLeave is true it shows Leave and Stay instead, and nothing is sent until Leave. */
+  confirmingLeave?: boolean;
+  onLeave?: () => void;
+  onLeaveConfirmed?: () => void;
+  onLeaveCancelled?: () => void;
 }
-export function LobbyScreen({ code, qr, players, meId, ready, pointsToWin, onPointsToWin, onKick, onBan, onToggleReady, onCopy, onShare }: LobbyScreenProps) {
+export function LobbyScreen({ code, qr, players, meId, ready, pointsToWin, onPointsToWin, onKick, onBan, onToggleReady, onCopy, onShare, confirmingLeave, onLeave, onLeaveConfirmed, onLeaveCancelled }: LobbyScreenProps) {
   const isHost = pointsToWin !== undefined;
+  // Added in rustyparty: leaving is rare and hard to undo, so it sits on its own, away from Ready
+  const leaveRow = onLeave ? (
+    <div className={styles.leaveRow}>
+      {confirmingLeave
+        ? <><ActionTile icon="back" label="Leave" aria-label="Yes, leave the room" className={styles.leaveTile} onClick={onLeaveConfirmed} /><ActionTile icon="tick" label="Stay" aria-label="Stay in the room" className={styles.leaveTile} onClick={onLeaveCancelled} /></>
+        : <ActionTile icon="back" label="Leave" aria-label="Leave the room" className={styles.leaveTile} onClick={onLeave} />}
+    </div>
+  ) : null;
   return (
     <Screen
-      glance={<><div className={styles.lobbyHead}><RoomCode code={code} /><QrFrame>{qr}</QrFrame></div>{isHost ? <PointsStepper value={pointsToWin} onChange={onPointsToWin ?? (() => {})} /> : null}</>}
+      glance={<>{leaveRow}<div className={styles.lobbyHead}><RoomCode code={code} /><QrFrame>{qr}</QrFrame></div>{isHost ? <PointsStepper value={pointsToWin} onChange={onPointsToWin ?? (() => {})} /> : null}</>}
       thumb={<><PlayerList players={players} moderatorId={isHost ? meId : undefined} onKick={onKick} onBan={onBan} /><ReadyRow ready={ready} onToggleReady={onToggleReady} onCopy={onCopy} onShare={onShare} /></>} />
   );
 }

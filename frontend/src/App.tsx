@@ -126,7 +126,7 @@ function App() {
           <Screen centerGlance glance={<Strip center>This game isn't in the app yet</Strip>} />
         )
     } else {
-      screen = <Lobby code={server.room} server={server} />
+      screen = <Lobby code={server.room} server={server} onLeft={home} />
     }
   } else if (server.room) {
     // Asking for the saved seat back, after a reload or reopening the app

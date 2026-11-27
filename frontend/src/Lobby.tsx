@@ -11,12 +11,28 @@ import type { Server } from './useServer'
 interface LobbyProps {
   code: string
   server: Server
+  // After leaving the room
+  onLeft: () => void
 }
 
-export function Lobby({ code, server }: LobbyProps) {
+export function Lobby({ code, server, onLeft }: LobbyProps) {
   const { welcome, lobby, lobbyAt } = server.state
   const [now, setNow] = useState(Date.now)
   const flash = useFlash()
+  // Leave was tapped, or the back gesture used, and Leave or Stay is showing
+  const [confirmingLeave, setConfirmingLeave] = useState(false)
+
+  // The phone's back gesture asks the same as the Leave tile. An extra history entry catches
+  // it, and is put back each time so the next back gesture is caught too
+  useEffect(() => {
+    if (!history.state?.lobby) history.pushState({ lobby: true }, '')
+    const back = () => {
+      history.pushState({ lobby: true }, '')
+      setConfirmingLeave(true)
+    }
+    window.addEventListener('popstate', back)
+    return () => window.removeEventListener('popstate', back)
+  }, [])
 
   // Tick once a second while someone is away, so their countdown goes down
   const anyoneAway = lobby?.players.some((player) => !player.connected) ?? false
@@ -71,6 +87,13 @@ export function Lobby({ code, server }: LobbyProps) {
         onPointsToWin={(value) => server.send({ type: 'room_settings', points_to_win: value })}
         onKick={(id) => server.send({ type: 'kick', player_id: Number(id) })}
         onBan={(id) => server.send({ type: 'ban', player_id: Number(id) })}
+        confirmingLeave={confirmingLeave}
+        onLeave={() => setConfirmingLeave(true)}
+        onLeaveCancelled={() => setConfirmingLeave(false)}
+        onLeaveConfirmed={() => {
+          server.send({ type: 'leave' })
+          onLeft()
+        }}
       />
       {flash.banner}
     </>
