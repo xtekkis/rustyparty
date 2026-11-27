@@ -3,7 +3,9 @@ import { Tile } from '../primitives/Tile';
 import { Icon } from '../primitives/Icon';
 import styles from './platform.module.css';
 
-const LETTERS = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'];
+// Changed in rustyparty: phone keyboard order, and room codes never use I or O
+const ROWS = ['QWERTYUIOP', 'ASDFGHJKL', 'ZXCVBNM'];
+const UNUSED = 'IO';
 
 export interface CodeSlotsProps {
   code: string;
@@ -32,11 +34,14 @@ export function CodeSlots({ code, length = 4, wrong }: CodeSlotsProps) {
 }
 
 export interface LetterTrayProps { onLetter: (letter: string) => void; onDelete: () => void; disabled?: boolean; }
-/** The A to Z tiles that replace the phone keyboard on the join screen. */
+/** The letter tiles that replace the phone keyboard on the join screen, in the same rows as a phone keyboard. */
 export function LetterTray({ onLetter, onDelete, disabled }: LetterTrayProps) {
   return (
     <div className={styles.tray}>
-      {LETTERS.map((l) => <button key={l} type="button" className={styles.key} disabled={disabled} onClick={() => onLetter(l)}>{l}</button>)}
+      {ROWS.map((row) => [...row].map((l) => {
+        const unused = UNUSED.includes(l);
+        return <button key={l} type="button" className={`${styles.key} ${unused ? styles.unusedKey : ''}`} disabled={disabled || unused} onClick={() => onLetter(l)}>{l}</button>;
+      }))}
       <button type="button" className={`${styles.key} ${styles.deleteKey}`} aria-label="Delete last letter" onClick={onDelete}><Icon name="delete" /></button>
     </div>
   );

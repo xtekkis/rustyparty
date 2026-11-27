@@ -2,11 +2,16 @@
 .slots{display:flex;gap:var(--space-2);justify-content:center}
 .emptySlot{width:64px;height:72px;background:var(--panel);box-shadow:inset 0 0 0 2px var(--divider);border-radius:var(--radius-tile)}
 .nextSlot{box-shadow:inset 0 0 0 3px var(--accent)}
-.tray{display:grid;grid-template-columns:repeat(6,1fr);gap:var(--space-2)}
+/* changed in rustyparty: QWERTY rows on a grid of half keys, so rows two and three can sit half a key in like a phone keyboard */
+.tray{display:grid;grid-template-columns:repeat(20,1fr);gap:var(--space-2) 4px}
+.tray>.key{grid-column:span 2}
+.tray>.key:nth-child(11){grid-column:2/span 2}
+.tray>.key:nth-child(20){grid-column:4/span 2}
+.tray>.unusedKey{opacity:.35;box-shadow:none;cursor:default}
 .key{min-height:var(--key);padding:0;border:0;background:var(--tile);color:var(--tile-ink);box-shadow:var(--shadow-key);font:400 23px/1 var(--world-display);border-radius:var(--radius-tile);cursor:pointer}
 .key:active{transform:translate(3px,3px);box-shadow:var(--shadow-pressed)}
 .key:focus-visible,.mod:focus-visible,.step button:focus-visible,.pick:focus-visible,.game:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
-.deleteKey{grid-column:span 4;background:var(--panel);color:var(--ink);display:grid;place-items:center}
+.tray>.deleteKey{grid-column:18/span 3;background:var(--panel);color:var(--ink);display:grid;place-items:center}
 .scanner{flex:1;min-height:0;background:var(--camera);box-shadow:var(--shadow-hard);position:relative;overflow:hidden;border-radius:var(--radius-tile)}
 .scanner video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .scanner i{position:absolute;width:44px;height:44px;border:5px solid var(--accent)}
@@ -69,9 +74,7 @@
 @container (min-aspect-ratio:3/2) and (max-height:520px){
   .slots{gap:var(--space-1)}
   .slots>*{width:44px!important;height:58px!important;font-size:30px!important}
-  .tray{grid-template-columns:repeat(7,1fr)}
   .key{min-height:var(--tap-min);font-size:20px}
-  .deleteKey{grid-column:span 2}
   .qr{width:60px;height:60px;padding:4px}
   .points{font-size:15px}
   .games{overflow-y:auto;min-height:0;gap:10px;padding:0 5px 5px 0}
