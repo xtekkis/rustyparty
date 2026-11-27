@@ -20,13 +20,20 @@ export interface BadTakesPlayScreenProps {
   picked: string[];
   others: (PlayerView & { played: boolean })[];
   onPick: (id: string) => void;
+  /** Added in rustyparty: shows a button that plays the picked cards, so a tap only picks. */
+  onPlay?: () => void;
+  /** The cards have been sent, so the button can't send them twice. */
+  sent?: boolean;
 }
-export function BadTakesPlayScreen({ judge, seconds, prompt, blanks, hand, picked, others, onPick }: BadTakesPlayScreenProps) {
+export function BadTakesPlayScreen({ judge, seconds, prompt, blanks, hand, picked, others, onPick, onPlay, sent }: BadTakesPlayScreenProps) {
   const answers = picked.map((id) => hand.find((c) => c.id === id)?.text);
+  const ready = picked.length === blanks;
+  const playLabel = blanks === 2 ? (ready ? 'Play these cards' : 'Tap two cards') : (ready ? 'Play this card' : 'Tap a card');
   return (
     <Screen world={WORLD}
       glance={<><TopBar timer={<Countdown seconds={seconds} />}><JudgeBadge judge={judge} /></TopBar><PromptCard text={prompt} answers={answers} numbered={blanks === 2} /></>}
-      thumb={<>{blanks === 2 ? <Strip>Pick two cards, in order</Strip> : <PlayedStrip players={others} />}<AnswerHand cards={hand} picked={picked} numbered={blanks === 2} onPick={onPick} /></>} />
+      thumb={<>{blanks === 2 ? <Strip>Pick two cards, in order</Strip> : <PlayedStrip players={others} />}<AnswerHand cards={hand} picked={picked} numbered={blanks === 2} onPick={onPick} />
+        {onPlay ? <Button disabled={!ready || sent} onClick={onPlay}>{playLabel}</Button> : null}</>} />
   );
 }
 

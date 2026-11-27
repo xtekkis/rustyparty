@@ -1,4 +1,4 @@
-// Playing your cards: one tap for a one-blank prompt, two taps in order for two blanks
+// Playing your cards: tap to pick one, or two in order for two blanks, then play them with the button
 import { useState } from 'react'
 import { BadTakesPlayScreen, type PlayerView } from '../../ui'
 import type { BadTakesAction, BadTakesView } from './protocol'
@@ -13,8 +13,10 @@ interface PlayProps {
 }
 
 export function Play({ view, judge, others, seconds, onAction }: PlayProps) {
-  // Cards picked so far for a two-blank prompt, in order
+  // Cards picked so far, in order
   const [picked, setPicked] = useState<string[]>([])
+  // The cards have gone to the server, so the button can't send them again
+  const [sent, setSent] = useState(false)
   if (!view.prompt || !view.hand) return null
   const blanks = view.prompt.pick
 
@@ -24,12 +26,14 @@ export function Play({ view, judge, others, seconds, onAction }: PlayProps) {
       setPicked(picked.filter((card) => card !== id))
       return
     }
-    const cards = [...picked, id]
-    if (cards.length === blanks) {
-      onAction({ kind: 'submit', cards: cards.map(Number) })
-    } else {
-      setPicked(cards)
-    }
+    // Fill the blanks in order. Once they're full, a new card takes the last one's place
+    setPicked(picked.length < blanks ? [...picked, id] : [...picked.slice(0, blanks - 1), id])
+  }
+
+  function play() {
+    if (picked.length !== blanks || sent) return
+    setSent(true)
+    onAction({ kind: 'submit', cards: picked.map(Number) })
   }
 
   return (
@@ -42,6 +46,8 @@ export function Play({ view, judge, others, seconds, onAction }: PlayProps) {
       picked={picked}
       others={others}
       onPick={pick}
+      onPlay={play}
+      sent={sent}
     />
   )
 }
