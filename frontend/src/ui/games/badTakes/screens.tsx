@@ -1,14 +1,21 @@
-import { forwardRef } from 'react';
+import { forwardRef, type ReactNode } from 'react';
 import { Screen } from '../../primitives/Screen';
 import { Button, Strip, TopBar } from '../../primitives/Controls';
 import { Countdown } from '../../primitives/Countdown';
 import { Scoreboard } from '../../platform/Scoreboard';
+import { InviteTile } from '../../platform/Invite';
 import { AnswerCard, AnswerHand, JudgeBadge, PlayedStrip, PromptCard, RevealProgress, WinnerBanner, type HandCard } from './Cards';
 import { CardBag, type CardBagHandle } from './CardBag';
 import type { PlayerView, ScoreRow } from '../../types';
 import styles from './badTakes.module.css';
 
 const WORLD = 'bad-takes' as const;
+
+/** Added in rustyparty: the Invite tile sits just left of the timer, when the screen has one. */
+function topRight(timer: ReactNode, onInvite?: () => void) {
+  if (!onInvite) return timer;
+  return <div className={styles.topRight}><InviteTile onClick={onInvite} />{timer}</div>;
+}
 
 export interface BadTakesPlayScreenProps {
   judge: PlayerView;
@@ -24,14 +31,16 @@ export interface BadTakesPlayScreenProps {
   onPlay?: () => void;
   /** The cards have been sent, so the button can't send them twice. */
   sent?: boolean;
+  /** Added in rustyparty: shows the Invite tile in the top bar. */
+  onInvite?: () => void;
 }
-export function BadTakesPlayScreen({ judge, seconds, prompt, blanks, hand, picked, others, onPick, onPlay, sent }: BadTakesPlayScreenProps) {
+export function BadTakesPlayScreen({ judge, seconds, prompt, blanks, hand, picked, others, onPick, onPlay, sent, onInvite }: BadTakesPlayScreenProps) {
   const answers = picked.map((id) => hand.find((c) => c.id === id)?.text);
   const ready = picked.length === blanks;
   const playLabel = blanks === 2 ? (ready ? 'Play these cards' : 'Tap two cards') : (ready ? 'Play this card' : 'Tap a card');
   return (
     <Screen world={WORLD}
-      glance={<><TopBar timer={<Countdown seconds={seconds} />}><JudgeBadge judge={judge} /></TopBar><PromptCard text={prompt} answers={answers} numbered={blanks === 2} /></>}
+      glance={<><TopBar timer={topRight(<Countdown seconds={seconds} />, onInvite)}><JudgeBadge judge={judge} /></TopBar><PromptCard text={prompt} answers={answers} numbered={blanks === 2} /></>}
       thumb={<>{blanks === 2 ? <Strip>Pick two cards, in order</Strip> : <PlayedStrip players={others} />}<AnswerHand cards={hand} picked={picked} numbered={blanks === 2} onPick={onPick} />
         {onPlay ? <Button disabled={!ready || sent} onClick={onPlay}>{playLabel}</Button> : null}</>} />
   );
@@ -48,12 +57,14 @@ export interface BadTakesWaitScreenProps {
   /** Everyone has played. The judge sees the pull button. */
   allIn?: boolean;
   onPull?: () => void;
+  /** Added in rustyparty: shows the Invite tile in the top bar. */
+  onInvite?: () => void;
 }
 /** While people play. Pass a ref and call dropIn each time someone plays. */
-export const BadTakesWaitScreen = forwardRef<CardBagHandle, BadTakesWaitScreenProps>(function BadTakesWaitScreen({ judge, isJudge, seconds, prompt, others, mine, allIn, onPull }, ref) {
+export const BadTakesWaitScreen = forwardRef<CardBagHandle, BadTakesWaitScreenProps>(function BadTakesWaitScreen({ judge, isJudge, seconds, prompt, others, mine, allIn, onPull, onInvite }, ref) {
   return (
     <Screen world={WORLD}
-      glance={<><TopBar timer={allIn ? undefined : <Countdown seconds={seconds} />}><JudgeBadge judge={judge} isMe={isJudge} /></TopBar><PromptCard text={prompt} /></>}
+      glance={<><TopBar timer={topRight(allIn ? undefined : <Countdown seconds={seconds} />, onInvite)}><JudgeBadge judge={judge} isMe={isJudge} /></TopBar><PromptCard text={prompt} /></>}
       thumb={<><PlayedStrip players={others} />{mine && !isJudge ? <Strip>You played: {mine.join(' / ')}</Strip> : null}<CardBag ref={ref} />
         {isJudge ? (allIn ? <Button onClick={onPull}>Pull the first card</Button> : <Strip center>Wait for the answers</Strip>) : (allIn ? <Strip center>{judge.nickname} pulls the cards out next</Strip> : null)}</>} />
   );
@@ -69,13 +80,15 @@ export interface BadTakesRevealScreenProps {
   total: number;
   numbered?: boolean;
   onNext?: () => void;
+  /** Added in rustyparty: shows the Invite tile in the top bar. */
+  onInvite?: () => void;
 }
 /** Cards come out one at a time. Pass a ref and call pullOut with the card's text. */
-export const BadTakesRevealScreen = forwardRef<CardBagHandle, BadTakesRevealScreenProps>(function BadTakesRevealScreen({ judge, isJudge, prompt, answers, shown, total, numbered, onNext }, ref) {
+export const BadTakesRevealScreen = forwardRef<CardBagHandle, BadTakesRevealScreenProps>(function BadTakesRevealScreen({ judge, isJudge, prompt, answers, shown, total, numbered, onNext, onInvite }, ref) {
   const last = shown >= total;
   return (
     <Screen world={WORLD}
-      glance={<><TopBar><JudgeBadge judge={judge} isMe={isJudge} /></TopBar><PromptCard text={prompt} answers={answers} numbered={numbered} /></>}
+      glance={<><TopBar timer={topRight(undefined, onInvite)}><JudgeBadge judge={judge} isMe={isJudge} /></TopBar><PromptCard text={prompt} answers={answers} numbered={numbered} /></>}
       thumb={<><RevealProgress total={total} shown={shown} /><CardBag ref={ref} />
         {isJudge ? <Button onClick={onNext}>{last ? `Show all ${total} cards` : 'Pull the next card'}</Button> : <Strip center>{judge.nickname} is reading it out</Strip>}</>} />
   );
@@ -92,13 +105,15 @@ export interface BadTakesJudgingScreenProps {
   selectedId?: string;
   onSelect?: (id: string) => void;
   onConfirm?: () => void;
+  /** Added in rustyparty: shows the Invite tile in the top bar. */
+  onInvite?: () => void;
 }
 /** All cards, no names. The judge taps one, then gives it the point. */
-export function BadTakesJudgingScreen({ judge, isJudge, seconds, prompt, answers, selectedId, onSelect, onConfirm }: BadTakesJudgingScreenProps) {
+export function BadTakesJudgingScreen({ judge, isJudge, seconds, prompt, answers, selectedId, onSelect, onConfirm, onInvite }: BadTakesJudgingScreenProps) {
   const chosen = isJudge ? answers.find((a) => a.id === selectedId) : undefined;
   return (
     <Screen world={WORLD}
-      glance={<><TopBar timer={<Countdown seconds={seconds} />}><JudgeBadge judge={judge} isMe={isJudge} /></TopBar><PromptCard text={prompt} answers={chosen?.texts} /></>}
+      glance={<><TopBar timer={topRight(<Countdown seconds={seconds} />, onInvite)}><JudgeBadge judge={judge} isMe={isJudge} /></TopBar><PromptCard text={prompt} answers={chosen?.texts} /></>}
       thumb={<><div className={styles.choose}>{answers.map((a) => <AnswerCard key={a.id} text={a.texts.join(' / ')} selected={isJudge && a.id === selectedId} onSelect={isJudge ? () => onSelect?.(a.id) : undefined} />)}</div>
         {isJudge ? <Button disabled={!selectedId} onClick={onConfirm}>{selectedId ? 'Give it the point' : 'Tap the best card'}</Button> : <Strip center>{judge.nickname} is choosing</Strip>}</>} />
   );

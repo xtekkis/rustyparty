@@ -10,6 +10,7 @@ export { Countdown } from './primitives/Countdown';
 export { StatusBanner } from './primitives/StatusBanner';
 export { CodeSlots, LetterTray, ScannerFrame } from './platform/Join';
 export { PlayerList, PointsStepper, ReadyRow, QrFrame } from './platform/Lobby';
+export { InviteTile, InviteCard } from './platform/Invite';
 export { NicknameField, AvatarPicker } from './platform/Profile';
 export { GameCard } from './platform/GameCard';
 export { Scoreboard, Champion } from './platform/Scoreboard';

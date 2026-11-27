@@ -9,9 +9,11 @@ interface JudgingProps {
   isJudge: boolean
   seconds: number
   onAction: (action: BadTakesAction) => void
+  // Opens the invite card
+  onInvite: () => void
 }
 
-export function Judging({ view, judge, isJudge, seconds, onAction }: JudgingProps) {
+export function Judging({ view, judge, isJudge, seconds, onAction, onInvite }: JudgingProps) {
   // The judge's choice so far. It stays on this phone until they give it the point
   const [selected, setSelected] = useState<string>()
   if (!view.prompt) return null
@@ -24,6 +26,7 @@ export function Judging({ view, judge, isJudge, seconds, onAction }: JudgingProp
 
   return (
     <BadTakesJudgingScreen
+      onInvite={onInvite}
       judge={judge}
       isJudge={isJudge}
       seconds={seconds}

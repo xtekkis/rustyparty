@@ -3,6 +3,7 @@ import { scoreRows, toPlayerView } from '../../players'
 import { FinalResultsScreen, LateJoinScreen, Screen, Strip } from '../../ui'
 import { useCountdown } from '../../useCountdown'
 import { useFlash } from '../../useFlash'
+import { useInvite } from '../../useInvite'
 import { useNewEvents } from '../../useNewEvents'
 import type { Server } from '../../useServer'
 import { Judging } from './Judging'
@@ -13,14 +14,17 @@ import { Wait } from './Wait'
 import type { BadTakesAction, BadTakesEvent, BadTakesView } from './protocol'
 
 interface BadTakesProps {
+  code: string
   server: Server
 }
 
-export function BadTakes({ server }: BadTakesProps) {
+export function BadTakes({ code, server }: BadTakesProps) {
   const { game, events, results, gameAt, resultsAt } = server.state
   const seconds = useCountdown(game?.ends_in, gameAt)
   const secondsToLobby = useCountdown(results?.ends_in, resultsAt)
   const flash = useFlash('bad-takes')
+  // The game goes on under the invite card, so nobody loses the cards they picked
+  const invite = useInvite(code, 'bad-takes', flash.show)
 
   // Round messages, shown briefly over the next round
   useNewEvents(events, (event) => {
@@ -31,14 +35,15 @@ export function BadTakes({ server }: BadTakesProps) {
 
   return (
     <>
-      {screenFor(server, seconds, secondsToLobby)}
+      {screenFor(server, seconds, secondsToLobby, invite.open)}
+      {invite.card}
       {flash.banner}
     </>
   )
 }
 
 // The screen for this phone, from what the game's view says
-function screenFor(server: Server, seconds: number, secondsToLobby: number) {
+function screenFor(server: Server, seconds: number, secondsToLobby: number, onInvite: () => void) {
   const { welcome, lobby, game, events } = server.state
   if (!welcome || !lobby) return null
   if (!game) {
@@ -84,7 +89,7 @@ function screenFor(server: Server, seconds: number, secondsToLobby: number) {
   // Your turn to play: a new round's picks start empty, because the key changes
   if (view.phase === 'submitting' && judge && me !== view.judge && !view.my_submission) {
     return (
-      <Play key={view.round} view={view} judge={judge} others={others} seconds={seconds} onAction={send} />
+      <Play key={view.round} view={view} judge={judge} others={others} seconds={seconds} onAction={send} onInvite={onInvite} />
     )
   }
 
@@ -103,6 +108,7 @@ function screenFor(server: Server, seconds: number, secondsToLobby: number) {
         seconds={seconds}
         events={events}
         onAction={send}
+        onInvite={onInvite}
       />
     )
   }
@@ -116,6 +122,7 @@ function screenFor(server: Server, seconds: number, secondsToLobby: number) {
         isJudge={me === view.judge}
         events={events}
         onAction={send}
+        onInvite={onInvite}
       />
     )
   }
@@ -130,6 +137,7 @@ function screenFor(server: Server, seconds: number, secondsToLobby: number) {
         isJudge={me === view.judge}
         seconds={seconds}
         onAction={send}
+        onInvite={onInvite}
       />
     )
   }

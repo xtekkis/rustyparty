@@ -1,11 +1,9 @@
 // The waiting room: the room code and everyone in it
-import { QRCodeSVG } from 'qrcode.react'
 import { useEffect, useState } from 'react'
-import { copyText } from './clipboard'
-import { joinLink as linkTo } from './joinLink'
 import { toPlayerView } from './players'
 import { LobbyScreen } from './ui'
 import { useFlash } from './useFlash'
+import { useInvite } from './useInvite'
 import type { Server } from './useServer'
 
 interface LobbyProps {
@@ -19,6 +17,7 @@ export function Lobby({ code, server, onLeft }: LobbyProps) {
   const { welcome, lobby, lobbyAt } = server.state
   const [now, setNow] = useState(Date.now)
   const flash = useFlash()
+  const invite = useInvite(code, 'platform', flash.show)
   // Leave was tapped, or the back gesture used, and Leave or Stay is showing
   const [confirmingLeave, setConfirmingLeave] = useState(false)
 
@@ -49,39 +48,19 @@ export function Lobby({ code, server, onLeft }: LobbyProps) {
   const me = lobby.players.find((player) => player.id === welcome.player_id)
   const ready = me?.ready ?? false
   const isHost = lobby.host === welcome.player_id
-  const joinLink = linkTo(code)
-
-  async function copy() {
-    if (await copyText(joinLink)) {
-      flash.show('Invite link copied')
-    } else {
-      flash.show("Couldn't copy the link", 'alert')
-    }
-  }
-
-  // The phone's own share menu, only on browsers that have one
-  const canShare = typeof navigator.share === 'function'
-  async function share() {
-    try {
-      await navigator.share({ title: 'rustyparty', text: `Join my rustyparty room ${code}`, url: joinLink })
-    } catch (error) {
-      // Closing the menu without picking anything isn't a failure
-      if ((error as Error).name !== 'AbortError') flash.show("Couldn't share the link", 'alert')
-    }
-  }
 
   return (
     <>
       <LobbyScreen
         code={code}
-        qr={<QRCodeSVG value={joinLink} title={`Join link ${joinLink}`} />}
+        qr={invite.qr}
         players={players}
         meId={String(welcome.player_id)}
         ready={ready}
         // The button changes when the server's lobby message says so, not before
         onToggleReady={() => server.send({ type: 'ready', ready: !ready })}
-        onCopy={copy}
-        onShare={canShare ? share : undefined}
+        onCopy={invite.copy}
+        onShare={invite.share}
         // Only the host gets the points setting, and Kick and Ban on everyone else
         pointsToWin={isHost ? lobby.settings.points_to_win : undefined}
         onPointsToWin={(value) => server.send({ type: 'room_settings', points_to_win: value })}

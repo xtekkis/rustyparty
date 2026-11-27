@@ -35,3 +35,5 @@
   .answer{font-size:15px;padding:7px 9px}
   .winner{padding:6px 10px}
 }
+/* added in rustyparty: the Invite tile beside the timer */
+.topRight{display:flex;align-items:center;gap:var(--space-2);flex:none}

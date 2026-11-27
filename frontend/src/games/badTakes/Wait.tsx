@@ -13,9 +13,11 @@ interface WaitProps {
   seconds: number
   events: GameEvent[]
   onAction: (action: BadTakesAction) => void
+  // Opens the invite card
+  onInvite: () => void
 }
 
-export function Wait({ view, judge, isJudge, others, seconds, events, onAction }: WaitProps) {
+export function Wait({ view, judge, isJudge, others, seconds, events, onAction, onInvite }: WaitProps) {
   const bag = useRef<CardBagHandle>(null)
 
   // Each time someone plays, a face-down card flies from their face on the strip into the bag
@@ -28,6 +30,7 @@ export function Wait({ view, judge, isJudge, others, seconds, events, onAction }
   if (!view.prompt) return null
   return (
     <BadTakesWaitScreen
+      onInvite={onInvite}
       ref={bag}
       judge={judge}
       isJudge={isJudge}

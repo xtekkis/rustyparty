@@ -121,7 +121,7 @@ function App() {
       // The running game's own screens, results included
       screen =
         lobby.game === 'bad_takes' ? (
-          <BadTakes server={server} />
+          <BadTakes code={server.room} server={server} />
         ) : (
           <Screen centerGlance glance={<Strip center>This game isn't in the app yet</Strip>} />
         )

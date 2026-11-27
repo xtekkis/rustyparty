@@ -10,6 +10,8 @@ interface RevealProps {
   isJudge: boolean
   events: GameEvent[]
   onAction: (action: BadTakesAction) => void
+  // Opens the invite card
+  onInvite: () => void
 }
 
 type Pulled = Extract<BadTakesEvent, { event: 'answer_pulled' }>
@@ -18,7 +20,7 @@ const pulledIn = (event: GameEvent | undefined) => {
   return game?.event === 'answer_pulled' ? game : null
 }
 
-export function Reveal({ view, judge, isJudge, events, onAction }: RevealProps) {
+export function Reveal({ view, judge, isJudge, events, onAction, onInvite }: RevealProps) {
   // The latest pull, the same object until the next one arrives
   const event = events.findLast((candidate) => pulledIn(candidate))
   const bag = useRef<CardBagHandle>(null)
@@ -63,6 +65,7 @@ export function Reveal({ view, judge, isJudge, events, onAction }: RevealProps) 
 
   return (
     <BadTakesRevealScreen
+      onInvite={onInvite}
       ref={bag}
       judge={judge}
       isJudge={isJudge}

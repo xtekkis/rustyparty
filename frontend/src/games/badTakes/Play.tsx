@@ -10,9 +10,11 @@ interface PlayProps {
   others: (PlayerView & { played: boolean })[]
   seconds: number
   onAction: (action: BadTakesAction) => void
+  // Opens the invite card
+  onInvite: () => void
 }
 
-export function Play({ view, judge, others, seconds, onAction }: PlayProps) {
+export function Play({ view, judge, others, seconds, onAction, onInvite }: PlayProps) {
   // Cards picked so far, in order
   const [picked, setPicked] = useState<string[]>([])
   // The cards have gone to the server, so the button can't send them again
@@ -38,6 +40,7 @@ export function Play({ view, judge, others, seconds, onAction }: PlayProps) {
 
   return (
     <BadTakesPlayScreen
+      onInvite={onInvite}
       judge={judge}
       seconds={seconds}
       prompt={view.prompt.text}
