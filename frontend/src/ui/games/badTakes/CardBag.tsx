@@ -1,4 +1,4 @@
-import { forwardRef, useImperativeHandle, useRef, type ReactElement } from 'react';
+import { forwardRef, useId, useImperativeHandle, useRef, type ReactElement } from 'react';
 import styles from './badTakes.module.css';
 
 const BODY = 'M40 42Q100 58 160 42C172 80 186 112 178 140Q172 164 142 164H58Q28 164 22 140C14 112 28 80 40 42Z';
@@ -18,6 +18,9 @@ const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 export const CardBag = forwardRef<CardBagHandle>(function CardBag(_, ref) {
   const bag = useRef<HTMLDivElement>(null);
   const running = useRef(new Set<Animation>());
+  // Added in rustyparty: the dots are clipped to the bag's outline, so none sit outside it.
+  // The id is unique to this bag, and only letters and digits work inside url(#...)
+  const clip = `bag${useId().replace(/[^a-zA-Z0-9]/g, '')}`;
   const play = (el: Element, keys: Keyframe[], opts: KeyframeAnimationOptions) => {
     const a = el.animate(keys, opts);
     running.current.add(a);
@@ -73,8 +76,9 @@ export const CardBag = forwardRef<CardBagHandle>(function CardBag(_, ref) {
       <div ref={bag} className={styles.bag} role="img" aria-label="Bag of played cards">
         <svg className={styles.bagBack} viewBox="0 0 200 170" aria-hidden="true"><path d={BODY} fill="var(--bag-shadow)" transform="translate(6 6)" /><ellipse cx="100" cy="38" rx="62" ry="15" fill="var(--bag-mouth)" /></svg>
         <svg className={styles.bagFront} viewBox="0 0 200 170" aria-hidden="true">
+          <defs><clipPath id={clip}><path d={BODY} /></clipPath></defs>
           <path d={BODY} fill="var(--bag)" />
-          <g fill="var(--bag-dots)">{DOTS}</g>
+          <g fill="var(--bag-dots)" clipPath={`url(#${clip})`}>{DOTS}</g>
           <path d="M38 52Q100 70 164 52" fill="none" stroke="var(--bag-mouth)" strokeWidth="5" />
           <path d="M100 62l-11 22M100 62l11 22" fill="none" stroke="var(--bag-mouth)" strokeWidth="4" />
         </svg>
