@@ -91,7 +91,7 @@ export function RevealProgress({ total, shown }: { total: number; shown: number 
 
 export interface JudgeBadgeProps { judge: PlayerView; isMe?: boolean; }
 export function JudgeBadge({ judge, isMe }: JudgeBadgeProps) {
-  return <div className={styles.judge}><Avatar nickname={judge.nickname} kind={judge.avatar} size="sm" /><span>{isMe ? "You're the judge" : `${judge.nickname} is judging`}</span></div>;
+  return <div className={styles.judge}><Avatar nickname={judge.nickname} kind={judge.avatar} size="sm" /><span className={styles.judgeText}>{isMe ? "You're the judge" : <><span className={styles.judgeName}>{judge.nickname}</span>{' '}<span className={styles.judging}>is judging</span></>}</span></div>;
 }
 
 export interface WinnerBannerProps { player: PlayerView; note?: string; }
