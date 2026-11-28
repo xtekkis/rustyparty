@@ -88,6 +88,7 @@ export function ReadyRow({ ready, onToggleReady, onCopy, onShare }: ReadyRowProp
 }
 
 /** The white square a QR code needs. Pass the QR as an svg child. */
-export function QrFrame({ children }: { children: ReactNode }) {
+export function QrFrame({ children, onClick }: { children: ReactNode; /** Added in rustyparty: makes the frame a button. */ onClick?: () => void }) {
+  if (onClick) return <button type="button" className={`${styles.qr} ${styles.qrButton}`} aria-label="Show the QR code big" onClick={onClick}>{children}</button>;
   return <div className={styles.qr}>{children}</div>;
 }

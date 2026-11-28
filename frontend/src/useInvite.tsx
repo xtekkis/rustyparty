@@ -1,6 +1,6 @@
 // The room's invite link: copy it, share it, or show it big with its QR code
 import { QRCodeSVG } from 'qrcode.react'
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import { copyText } from './clipboard'
 import { joinLink } from './joinLink'
 import { InviteCard, type World } from './ui'
@@ -10,6 +10,8 @@ type Show = (text: string, tone?: 'info' | 'alert') => void
 // world: the screens the invite card shows over. show: the screen's flash messages
 export function useInvite(code: string, world: World, show: Show) {
   const [open, setOpen] = useState(false)
+  // The same function every render, so effects can depend on it
+  const close = useCallback(() => setOpen(false), [])
   const link = joinLink(code)
 
   async function copy() {
@@ -34,8 +36,8 @@ export function useInvite(code: string, world: World, show: Show) {
   const qr = <QRCodeSVG value={link} title={`Join link ${link}`} />
   const onShare = canShare ? share : undefined
   const card = open ? (
-    <InviteCard world={world} code={code} qr={qr} onCopy={copy} onShare={onShare} onClose={() => setOpen(false)} />
+    <InviteCard world={world} code={code} qr={qr} onCopy={copy} onShare={onShare} onClose={close} />
   ) : null
 
-  return { qr, copy, share: onShare, card, open: () => setOpen(true) }
+  return { qr, copy, share: onShare, card, isOpen: open, open: () => setOpen(true), close }
 }

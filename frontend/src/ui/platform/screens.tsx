@@ -90,13 +90,15 @@ export interface LobbyScreenProps {
   onToggleReady: () => void;
   onCopy: () => void;
   onShare?: () => void;
+  /** Added in rustyparty: makes the QR code a button, for showing it big. */
+  onShowQr?: () => void;
   /** Shows the Leave tile at the top (added in rustyparty). While confirmingLeave is true it shows Leave and Stay instead, and nothing is sent until Leave. */
   confirmingLeave?: boolean;
   onLeave?: () => void;
   onLeaveConfirmed?: () => void;
   onLeaveCancelled?: () => void;
 }
-export function LobbyScreen({ code, qr, players, meId, ready, pointsToWin, onPointsToWin, onKick, onBan, onToggleReady, onCopy, onShare, confirmingLeave, onLeave, onLeaveConfirmed, onLeaveCancelled }: LobbyScreenProps) {
+export function LobbyScreen({ code, qr, players, meId, ready, pointsToWin, onPointsToWin, onKick, onBan, onToggleReady, onCopy, onShare, onShowQr, confirmingLeave, onLeave, onLeaveConfirmed, onLeaveCancelled }: LobbyScreenProps) {
   const isHost = pointsToWin !== undefined;
   // Added in rustyparty: leaving is rare and hard to undo, so it sits on its own, away from Ready
   const leaveRow = onLeave ? (
@@ -108,7 +110,7 @@ export function LobbyScreen({ code, qr, players, meId, ready, pointsToWin, onPoi
   ) : null;
   return (
     <Screen
-      glance={<>{leaveRow}<div className={styles.lobbyHead}><RoomCode code={code} /><QrFrame>{qr}</QrFrame></div>{isHost ? <PointsStepper value={pointsToWin} onChange={onPointsToWin ?? (() => {})} /> : null}</>}
+      glance={<>{leaveRow}<div className={styles.lobbyHead}><RoomCode code={code} /><QrFrame onClick={onShowQr}>{qr}</QrFrame></div>{isHost ? <PointsStepper value={pointsToWin} onChange={onPointsToWin ?? (() => {})} /> : null}</>}
       thumb={<><PlayerList players={players} moderatorId={isHost ? meId : undefined} onKick={onKick} onBan={onBan} /><ReadyRow ready={ready} onToggleReady={onToggleReady} onCopy={onCopy} onShare={onShare} /></>} />
   );
 }

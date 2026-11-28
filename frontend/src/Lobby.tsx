@@ -21,17 +21,23 @@ export function Lobby({ code, server, onLeft }: LobbyProps) {
   // Leave was tapped, or the back gesture used, and Leave or Stay is showing
   const [confirmingLeave, setConfirmingLeave] = useState(false)
 
-  // The phone's back gesture asks the same as the Leave tile. An extra history entry catches
-  // it, and is put back each time so the next back gesture is caught too
+  // The phone's back gesture asks the same as the Leave tile, or closes the invite card if it's
+  // open. An extra history entry catches it, and is put back each time so the next back gesture
+  // is caught too
+  const { isOpen: inviteOpen, close: closeInvite } = invite
   useEffect(() => {
     if (!history.state?.lobby) history.pushState({ lobby: true }, '')
     const back = () => {
       history.pushState({ lobby: true }, '')
-      setConfirmingLeave(true)
+      if (inviteOpen) {
+        closeInvite()
+      } else {
+        setConfirmingLeave(true)
+      }
     }
     window.addEventListener('popstate', back)
     return () => window.removeEventListener('popstate', back)
-  }, [])
+  }, [inviteOpen, closeInvite])
 
   // Tick once a second while someone is away, so their countdown goes down
   const anyoneAway = lobby?.players.some((player) => !player.connected) ?? false
@@ -61,6 +67,7 @@ export function Lobby({ code, server, onLeft }: LobbyProps) {
         onToggleReady={() => server.send({ type: 'ready', ready: !ready })}
         onCopy={invite.copy}
         onShare={invite.share}
+        onShowQr={invite.open}
         // Only the host gets the points setting, and Kick and Ban on everyone else
         pointsToWin={isHost ? lobby.settings.points_to_win : undefined}
         onPointsToWin={(value) => server.send({ type: 'room_settings', points_to_win: value })}
@@ -74,6 +81,7 @@ export function Lobby({ code, server, onLeft }: LobbyProps) {
           onLeft()
         }}
       />
+      {invite.card}
       {flash.banner}
     </>
   )
