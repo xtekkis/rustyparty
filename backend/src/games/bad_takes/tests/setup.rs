@@ -88,6 +88,11 @@ fn max_players_keeps_half_the_answers_in_reserve() {
 }
 
 #[test]
+fn the_spicy_deck_seats_as_many_as_the_starter() {
+    assert_eq!(max_players(deck::spicy_deck().answers.len()), 10);
+}
+
+#[test]
 fn bad_takes_is_in_the_registry() {
     let info = find_game(&GAMES, "bad_takes").expect("Bad Takes is registered");
     assert_eq!(info.name, "Bad Takes");

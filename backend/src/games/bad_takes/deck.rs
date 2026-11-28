@@ -9,14 +9,24 @@ pub type CardId = u32;
 
 // Built into the program, so the server doesn't depend on the folder it's started from
 const STARTER_JSON: &str = include_str!("../../../data/bad_takes_starter.json");
+const SPICY_JSON: &str = include_str!("../../../data/bad_takes_spicy.json");
 
-static STARTER: LazyLock<DeckFile> = LazyLock::new(|| {
-    parse_deck(STARTER_JSON)
-        .unwrap_or_else(|error| panic!("bad_takes_starter.json is invalid: {error}"))
-});
+static STARTER: LazyLock<DeckFile> =
+    LazyLock::new(|| built_in(STARTER_JSON, "bad_takes_starter.json"));
+static SPICY: LazyLock<DeckFile> = LazyLock::new(|| built_in(SPICY_JSON, "bad_takes_spicy.json"));
+
+// A deck that ships with the game. A broken one is a bug, so the server stops with the reason
+fn built_in(json: &str, file: &str) -> DeckFile {
+    parse_deck(json).unwrap_or_else(|error| panic!("{file} is invalid: {error}"))
+}
 
 pub fn starter_deck() -> &'static DeckFile {
     &STARTER
+}
+
+// Raunchier and darker. Only tests use it until the host can pick a deck
+pub fn spicy_deck() -> &'static DeckFile {
+    &SPICY
 }
 
 // A card with one or two gaps, read out by the judge
@@ -183,6 +193,14 @@ mod tests {
         assert_eq!(deck.name, "Starter");
         assert_eq!(deck.prompts.len(), 45);
         assert_eq!(deck.answers.len(), 140);
+    }
+
+    #[test]
+    fn spicy_deck_loads() {
+        let deck = spicy_deck();
+        assert_eq!(deck.name, "Spicy");
+        assert_eq!(deck.prompts.len(), 52);
+        assert_eq!(deck.answers.len(), 155);
     }
 
     // A small valid deck as JSON text, with one prompt changed by the test
